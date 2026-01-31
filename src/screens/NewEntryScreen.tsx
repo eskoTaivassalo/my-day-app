@@ -66,15 +66,25 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const pickImageFromGallery = async () => {
+    console.log('pickImageFromGallery called');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       quality: 0.8,
     });
 
+    console.log('Gallery picker result:', JSON.stringify(result, null, 2));
+    console.log('Result canceled?', result.canceled);
+    console.log('Result has assets?', result.assets ? 'yes' : 'no');
+
     if (!result.canceled && result.assets) {
       const newImages = result.assets.map((asset) => asset.uri);
+      console.log('New images from gallery:', newImages);
+      console.log('Current selectedImages before:', selectedImages);
       setSelectedImages([...selectedImages, ...newImages]);
+      console.log('Current selectedImages after:', [...selectedImages, ...newImages]);
+    } else {
+      console.log('Gallery selection was canceled or no assets');
     }
   };
 
@@ -97,10 +107,13 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const toggleRecentPhoto = (uri: string) => {
+    console.log('toggleRecentPhoto called with:', uri);
+    console.log('Current selectedImages:', selectedImages);
     if (selectedImages.includes(uri)) {
       setSelectedImages(selectedImages.filter((img) => img !== uri));
     } else {
       setSelectedImages([...selectedImages, uri]);
+      console.log('Added to selectedImages, new array:', [...selectedImages, uri]);
     }
   };
 
@@ -128,8 +141,11 @@ export default function NewEntryScreen({ navigation }: any) {
     try {
       // Upload images to Firebase Storage if any
       let imageUrls: string[] = [];
+      console.log('Saving entry with images:', selectedImages);
       if (selectedImages.length > 0) {
+        console.log('Uploading images to Firebase Storage...');
         imageUrls = await uploadImages(selectedImages, user.uid);
+        console.log('Image URLs from Firebase:', imageUrls);
       }
 
       // Save entry to Firestore

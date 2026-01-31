@@ -9,6 +9,11 @@ export interface DiaryEntry {
     longitude: number;
     address?: string;
   };
+  // Layout settings
+  layout?: 'grid' | 'masonry' | 'magazine';
+  textPosition?: 'top' | 'middle' | 'bottom';
+  imageShape?: 'square' | 'circle' | 'landscape';
+  textOverlay?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

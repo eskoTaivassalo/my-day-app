@@ -17,7 +17,7 @@ const firebaseConfig = {
 // Initialize Firebase (prevent multiple initializations)
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Auth - getAuth() automatically handles persistence in React Native
+// Initialize Auth
 const auth: Auth = getAuth(app);
 
 // Initialize services

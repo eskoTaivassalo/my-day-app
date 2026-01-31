@@ -8,10 +8,13 @@ import {
   Image,
   RefreshControl,
   Alert,
+  Animated,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { useAuth } from '../contexts/AuthContext';
 import { getEntries } from '../services/diaryService';
+import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
@@ -23,6 +26,15 @@ export default function TimelineScreen({ navigation }: any) {
       loadEntries();
     }
   }, [user]);
+
+  // Ladataan entryt uudelleen kun palataan tähän screeniin
+  useFocusEffect(
+    React.useCallback(() => {
+      if (user) {
+        loadEntries();
+      }
+    }, [user])
+  );
 
   const loadEntries = async () => {
     if (!user) return;
@@ -66,95 +78,268 @@ export default function TimelineScreen({ navigation }: any) {
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleDateString('fi-FI', {
       weekday: 'long',
-      year: 'numeric',
-      month: 'long',
       day: 'numeric',
+      month: 'long',
+      year: 'numeric',
     });
   };
 
-  const renderEntry = ({ item }: { item: DiaryEntry }) => (
-    <TouchableOpacity
-      style={styles.entryCard}
-      onPress={() => {
-        // TODO: Navigate to entry detail
-      }}
-    >
-      <View style={styles.entryHeader}>
-        <Text style={styles.entryDate}>{formatDate(item.date)}</Text>
-        {item.location && (
-          <Text style={styles.locationText}>📍 {item.location.address}</Text>
+  const getTimeAgo = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - new Date(date).getTime();
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const days = Math.floor(hours / 24);
+    
+    if (hours < 1) return 'Juuri nyt';
+    if (hours < 24) return `${hours}h sitten`;
+    if (days === 1) return 'Eilen';
+    if (days < 7) return `${days} päivää sitten`;
+    return formatDate(date);
+  };
+
+  const renderEntry = ({ item }: { item: DiaryEntry }) => {
+    // Text Overlay Mode
+    if (item.textOverlay && item.images.length > 0) {
+      return (
+        <View style={styles.entryCard}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => {
+              navigation.navigate('EntryDetail', {
+                entry: item,
+                onUpdate: loadEntries,
+              });
+            }}
+          >
+            <View style={styles.overlayCard}>
+              {/* Background Image */}
+              <Image 
+                source={{ uri: item.images[0] }} 
+                style={styles.overlayBackground}
+                blurRadius={1}
+              />
+              
+              {/* Dark overlay */}
+              <View style={styles.overlayDark} />
+              
+              {/* Content on top */}
+              <View style={styles.overlayContent}>
+                <View style={styles.entryHeader}>
+                  <View style={styles.dateContainer}>
+                    <Text style={[styles.dayNumber, { color: colors.white }]}>
+                      {new Date(item.date).getDate()}
+                    </Text>
+                    <Text style={[styles.monthText, { color: colors.white }]}>
+                      {new Date(item.date).toLocaleDateString('fi-FI', { month: 'short' })}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.entryHeaderContent}>
+                    <Text style={[styles.entryTitle, { color: colors.white }]} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={[styles.entryTime, { color: colors.white }]}>
+                      {getTimeAgo(item.date)}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={[styles.entryContent, { color: colors.white }]} numberOfLines={3}>
+                  {item.content}
+                </Text>
+
+                <View style={styles.entryFooter}>
+                  {item.location && (
+                    <View style={styles.locationContainer}>
+                      <Text style={styles.locationIcon}>📍</Text>
+                      <Text style={[styles.locationText, { color: colors.white }]} numberOfLines={1}>
+                        {item.location.address}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.entryStats}>
+                    {item.images.length > 0 && (
+                      <View style={styles.stat}>
+                        <Text style={styles.statIcon}>📷</Text>
+                        <Text style={[styles.statText, { color: colors.white }]}>{item.images.length}</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // Normal Mode
+    return (
+    <View style={styles.entryCard}>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => {
+          navigation.navigate('EntryDetail', {
+            entry: item,
+            onUpdate: loadEntries,
+          });
+        }}
+      >
+        {/* Entry Header */}
+        <View style={styles.entryHeader}>
+          <View style={styles.dateContainer}>
+            <Text style={styles.dayNumber}>
+              {new Date(item.date).getDate()}
+            </Text>
+            <Text style={styles.monthText}>
+              {new Date(item.date).toLocaleDateString('fi-FI', { month: 'short' })}
+            </Text>
+          </View>
+          
+          <View style={styles.entryHeaderContent}>
+            <Text style={styles.entryTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.entryTime}>
+              {getTimeAgo(item.date)}
+            </Text>
+          </View>
+        </View>
+
+        {/* Entry Content */}
+        <Text style={styles.entryContent} numberOfLines={3}>
+          {item.content}
+        </Text>
+
+        {/* Images Grid */}
+        {item.images.length > 0 && (
+          <View style={styles.imagesGrid}>
+            {item.images.slice(0, 4).map((imageUri, imgIndex) => (
+              <View
+                key={imgIndex}
+                style={[
+                  styles.imageWrapper,
+                  item.images.length === 1 && styles.singleImage,
+                  item.images.length >= 2 && styles.multiImage,
+                  // Apply image shape from entry settings
+                  item.imageShape === 'circle' && styles.circleImageWrapper,
+                  item.imageShape === 'landscape' && styles.landscapeImageWrapper,
+                ]}
+              >
+                <Image
+                  source={{ uri: imageUri }}
+                  style={styles.image}
+                />
+                {item.images.length > 4 && imgIndex === 3 && (
+                  <View style={styles.moreImagesOverlay}>
+                    <Text style={styles.moreImagesText}>
+                      +{item.images.length - 4}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
         )}
-      </View>
 
-      <Text style={styles.entryTitle}>{item.title}</Text>
-      <Text style={styles.entryContent} numberOfLines={3}>
-        {item.content}
-      </Text>
-
-      {item.images.length > 0 && (
-        <View style={styles.imageContainer}>
-          {item.images.slice(0, 3).map((imageUri, index) => (
-            <Image
-              key={index}
-              source={{ uri: imageUri }}
-              style={styles.thumbnail}
-            />
-          ))}
-          {item.images.length > 3 && (
-            <View style={styles.moreImages}>
-              <Text style={styles.moreImagesText}>
-                +{item.images.length - 3}
+        {/* Entry Footer */}
+        <View style={styles.entryFooter}>
+          {item.location && (
+            <View style={styles.locationContainer}>
+              <Text style={styles.locationIcon}>📍</Text>
+              <Text style={styles.locationText} numberOfLines={1}>
+                {item.location.address}
               </Text>
             </View>
           )}
+          <View style={styles.entryStats}>
+            {item.images.length > 0 && (
+              <View style={styles.stat}>
+                <Text style={styles.statIcon}>📷</Text>
+                <Text style={styles.statText}>{item.images.length}</Text>
+              </View>
+            )}
+          </View>
         </View>
-      )}
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
   );
+};
 
   return (
     <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Päiväkirjani</Text>
-          {user?.email && (
-            <Text style={styles.userEmail}>{user.email}</Text>
-          )}
-        </View>
-        <View style={styles.headerButtons}>
+        <View style={styles.headerTop}>
+          <View>
+            <Text style={styles.headerTitle}>Päiväkirjani</Text>
+            <Text style={styles.headerSubtitle}>
+              {entries.length} {entries.length === 1 ? 'merkintä' : 'merkintää'}
+            </Text>
+          </View>
           <TouchableOpacity
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <Text style={styles.logoutButtonText}>Kirjaudu ulos</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => navigation.navigate('NewEntry')}
-          >
-            <Text style={styles.addButtonText}>+ Uusi</Text>
+            <Text style={styles.logoutIcon}>👋</Text>
           </TouchableOpacity>
         </View>
+        
+        {user?.email && (
+          <View style={styles.userCard}>
+            <View style={styles.userAvatar}>
+              <Text style={styles.userAvatarText}>
+                {user.email.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <Text style={styles.userEmail}>{user.email}</Text>
+          </View>
+        )}
       </View>
 
+      {/* Entries List */}
       <FlatList
         data={entries}
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>📖</Text>
-            <Text style={styles.emptyTitle}>Ei vielä merkintöjä</Text>
+            <View style={styles.emptyIconContainer}>
+              <Text style={styles.emptyIcon}>📖</Text>
+            </View>
+            <Text style={styles.emptyTitle}>Aloita päiväkirjan kirjoittaminen</Text>
             <Text style={styles.emptySubtitle}>
-              Aloita päiväkirjan kirjoittaminen painamalla "+ Uusi"
+              Tallenna muistosi ja hetket helposti{'\n'}päivä kerrallaan
             </Text>
+            <TouchableOpacity
+              style={styles.emptyButton}
+              onPress={() => navigation.navigate('NewEntry')}
+            >
+              <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
+            </TouchableOpacity>
           </View>
         }
       />
+
+      {/* Floating Action Button */}
+      {entries.length > 0 && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('NewEntry')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.fabIcon}>✏️</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -162,136 +347,274 @@ export default function TimelineScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.backgroundLight,
   },
   header: {
+    backgroundColor: colors.white,
+    paddingTop: 60,
+    paddingBottom: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+    ...shadows.sm,
+  },
+  headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    paddingTop: 60,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    marginBottom: spacing.md,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
+    ...commonStyles.heading1,
+    marginBottom: spacing.xs,
   },
-  userEmail: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
+  headerSubtitle: {
+    ...commonStyles.bodySecondary,
   },
   logoutButton: {
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
+    width: 48,
+    height: 48,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  logoutButtonText: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '600',
+  logoutIcon: {
+    fontSize: 24,
   },
-  addButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gray50,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
   },
-  addButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+  userAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.sm,
+  },
+  userAvatarText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.bold,
+  },
+  userEmail: {
+    ...commonStyles.bodySecondary,
+    flex: 1,
   },
   listContent: {
-    padding: 16,
+    padding: spacing.md,
   },
   entryCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadows.md,
+  },
+  overlayCard: {
+    position: 'relative',
+    minHeight: 250,
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
+  },
+  overlayBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+  },
+  overlayDark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  overlayContent: {
+    position: 'relative',
+    zIndex: 1,
+    padding: spacing.lg,
   },
   entryHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  dateContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginRight: spacing.md,
   },
-  entryDate: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+  dayNumber: {
+    fontSize: typography.fontSizes.xxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.white,
+    lineHeight: typography.fontSizes.xxl,
   },
-  locationText: {
-    fontSize: 12,
-    color: '#999',
+  monthText: {
+    fontSize: typography.fontSizes.xs,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.white,
+    textTransform: 'uppercase',
+  },
+  entryHeaderContent: {
+    flex: 1,
+    justifyContent: 'center',
   },
   entryTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
+    ...commonStyles.heading3,
+    marginBottom: spacing.xs,
+  },
+  entryTime: {
+    ...commonStyles.caption,
   },
   entryContent: {
-    fontSize: 16,
-    color: '#666',
-    lineHeight: 24,
-    marginBottom: 12,
+    ...commonStyles.body,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
   },
-  imageContainer: {
+  imagesGrid: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
   },
-  thumbnail: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
+  imageWrapper: {
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    position: 'relative',
+    marginBottom: spacing.sm,
   },
-  moreImages: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-    backgroundColor: '#000',
-    opacity: 0.7,
+  circleImageWrapper: {
+    borderRadius: borderRadius.full,
+  },
+  landscapeImageWrapper: {
+    aspectRatio: 16 / 9,
+  },
+  singleImage: {
+    width: '100%',
+    height: 200,
+  },
+  multiImage: {
+    width: '48.5%',
+    height: 150,
+  },
+  image: {
+    width: '100%',
+    height: '100%',
+  },
+  moreImagesOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.overlay,
     justifyContent: 'center',
     alignItems: 'center',
   },
   moreImagesText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
+    color: colors.white,
+    fontSize: typography.fontSizes.xxl,
+    fontWeight: typography.fontWeights.bold,
+  },
+  entryFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  locationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  locationIcon: {
+    fontSize: typography.fontSizes.md,
+    marginRight: spacing.xs,
+  },
+  locationText: {
+    ...commonStyles.caption,
+    flex: 1,
+  },
+  entryStats: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  stat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  statIcon: {
+    fontSize: typography.fontSizes.sm,
+  },
+  statText: {
+    ...commonStyles.caption,
   },
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 100,
+    paddingTop: 80,
+    paddingHorizontal: spacing.xl,
   },
-  emptyText: {
+  emptyIconContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primaryLight + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  emptyIcon: {
     fontSize: 60,
-    marginBottom: 16,
   },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
+    ...commonStyles.heading2,
+    textAlign: 'center',
+    marginBottom: spacing.sm,
   },
   emptySubtitle: {
-    fontSize: 16,
-    color: '#666',
+    ...commonStyles.body,
+    color: colors.textSecondary,
     textAlign: 'center',
+    marginBottom: spacing.xl,
+  },
+  emptyButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.full,
+    ...shadows.lg,
+  },
+  emptyButtonText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  fab: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.xl,
+    width: 64,
+    height: 64,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.xl,
+  },
+  fabIcon: {
+    fontSize: 28,
   },
 });

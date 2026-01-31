@@ -14,6 +14,7 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import TimelineScreen from './src/screens/TimelineScreen';
 import CalendarScreen from './src/screens/CalendarScreen';
 import NewEntryScreen from './src/screens/NewEntryScreen';
+import EntryDetailScreen from './src/screens/EntryDetailScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -93,6 +94,13 @@ function AppNavigator() {
         component={NewEntryScreen}
         options={{
           presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="EntryDetail"
+        component={EntryDetailScreen}
+        options={{
           headerShown: false,
         }}
       />

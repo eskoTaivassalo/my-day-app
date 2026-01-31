@@ -8,7 +8,10 @@ import {
   GoogleAuthProvider,
   signInWithCredential,
 } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../services/firebase';
+
+const AUTH_USER_KEY = '@my_day_auth_user';
 
 interface AuthContextType {
   user: User | null;
@@ -26,12 +29,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+    let isMounted = true;
+
+    // Try to restore user from AsyncStorage first
+    const restoreUser = async () => {
+      try {
+        const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
+        if (savedUser && isMounted) {
+          console.log('Restored user from AsyncStorage');
+        }
+      } catch (error) {
+        console.error('Error restoring user:', error);
+      }
+    };
+
+    restoreUser();
+
+    // Listen to auth state changes
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!isMounted) return;
+
+      console.log('Auth state changed:', firebaseUser ? 'logged in' : 'logged out');
+      
+      setUser(firebaseUser);
       setLoading(false);
+
+      // Save/remove user in AsyncStorage
+      try {
+        if (firebaseUser) {
+          await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            displayName: firebaseUser.displayName,
+          }));
+          console.log('User saved to AsyncStorage');
+        } else {
+          await AsyncStorage.removeItem(AUTH_USER_KEY);
+          console.log('User removed from AsyncStorage');
+        }
+      } catch (error) {
+        console.error('Error saving user to AsyncStorage:', error);
+      }
     });
 
-    return unsubscribe;
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
