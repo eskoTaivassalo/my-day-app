@@ -1,9 +1,16 @@
 import React from 'react';
-import { Text, ActivityIndicator, View } from 'react-native';
+import { Text, ActivityIndicator, View, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+
+// Ignore Firebase AsyncStorage warning
+LogBox.ignoreLogs([
+  'AsyncStorage has been extracted from react-native core',
+  '@firebase/auth: Auth',
+  'You are initializing Firebase Auth for React Native without providing AsyncStorage'
+]);
 
 // Auth
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
@@ -13,8 +20,11 @@ import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import TimelineScreen from './src/screens/TimelineScreen';
 import CalendarScreen from './src/screens/CalendarScreen';
+import DocumentsScreen from './src/screens/DocumentsScreen';
+import DocumentDetailScreen from './src/screens/DocumentDetailScreen';
 import NewEntryScreen from './src/screens/NewEntryScreen';
 import EntryDetailScreen from './src/screens/EntryDetailScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -55,6 +65,14 @@ function MainTabs() {
         options={{
           title: 'Kalenteri',
           tabBarIcon: ({ color }) => <TabIcon icon="📅" color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="Documents"
+        component={DocumentsScreen}
+        options={{
+          title: 'Dokumentit',
+          tabBarIcon: ({ color }) => <TabIcon icon="📄" color={color} />,
         }}
       />
     </Tab.Navigator>
@@ -100,6 +118,20 @@ function AppNavigator() {
       <Stack.Screen
         name="EntryDetail"
         component={EntryDetailScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="Profile"
+        component={ProfileScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="DocumentDetail"
+        component={DocumentDetailScreen}
         options={{
           headerShown: false,
         }}

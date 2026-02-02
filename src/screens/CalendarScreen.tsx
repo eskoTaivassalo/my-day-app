@@ -6,8 +6,13 @@ import {
   TouchableOpacity,
   ScrollView,
   Dimensions,
+  Image,
 } from 'react-native';
 import { DiaryEntry } from '../types/DiaryEntry';
+import { Document } from '../types/Document';
+import { useAuth } from '../contexts/AuthContext';
+import { getEntries } from '../services/diaryService';
+import { getDocuments } from '../services/documentService';
 
 const { width } = Dimensions.get('window');
 const CALENDAR_WIDTH = width - 32;
@@ -17,38 +22,46 @@ interface CalendarDay {
   date: Date;
   isCurrentMonth: boolean;
   hasEntry: boolean;
+  hasDocument: boolean;
   entries: DiaryEntry[];
+  documents: Document[];
 }
 
 export default function CalendarScreen({ navigation }: any) {
+  const { user } = useAuth();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadEntries();
-  }, []);
+    if (user) {
+      loadEntries();
+    }
+  }, [user]);
 
   useEffect(() => {
     generateCalendar();
-  }, [currentDate, entries]);
+  }, [currentDate, entries, documents]);
 
   const loadEntries = async () => {
-    // TODO: Fetch from Firebase Firestore
-    // For now, using mock data
-    const mockEntries: DiaryEntry[] = [
-      {
-        id: '1',
-        date: new Date(),
-        title: 'Tänään',
-        content: 'Päivän muistiinpanot',
-        images: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-    ];
-    setEntries(mockEntries);
+    if (!user) return;
+    
+    try {
+      setLoading(true);
+      const [fetchedEntries, fetchedDocuments] = await Promise.all([
+        getEntries(user.uid),
+        getDocuments(user.uid),
+      ]);
+      setEntries(fetchedEntries);
+      setDocuments(fetchedDocuments);
+    } catch (error) {
+      console.error('Error loading entries:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const generateCalendar = () => {
@@ -76,7 +89,9 @@ export default function CalendarScreen({ navigation }: any) {
         date,
         isCurrentMonth: false,
         hasEntry: hasEntryOnDate(date),
+        hasDocument: hasDocumentOnDate(date),
         entries: getEntriesForDate(date),
+        documents: getDocumentsForDate(date),
       });
     }
 
@@ -87,7 +102,9 @@ export default function CalendarScreen({ navigation }: any) {
         date,
         isCurrentMonth: true,
         hasEntry: hasEntryOnDate(date),
+        hasDocument: hasDocumentOnDate(date),
         entries: getEntriesForDate(date),
+        documents: getDocumentsForDate(date),
       });
     }
 
@@ -99,7 +116,9 @@ export default function CalendarScreen({ navigation }: any) {
         date,
         isCurrentMonth: false,
         hasEntry: hasEntryOnDate(date),
+        hasDocument: hasDocumentOnDate(date),
         entries: getEntriesForDate(date),
+        documents: getDocumentsForDate(date),
       });
     }
 
@@ -112,6 +131,14 @@ export default function CalendarScreen({ navigation }: any) {
 
   const getEntriesForDate = (date: Date): DiaryEntry[] => {
     return entries.filter((entry) => isSameDay(new Date(entry.date), date));
+  };
+
+  const hasDocumentOnDate = (date: Date): boolean => {
+    return documents.some((doc) => isSameDay(new Date(doc.date), date));
+  };
+
+  const getDocumentsForDate = (date: Date): Document[] => {
+    return documents.filter((doc) => isSameDay(new Date(doc.date), date));
   };
 
   const isSameDay = (date1: Date, date2: Date): boolean => {
@@ -140,10 +167,21 @@ export default function CalendarScreen({ navigation }: any) {
 
   const handleDayPress = (day: CalendarDay) => {
     setSelectedDate(day.date);
-    if (day.hasEntry && day.entries.length > 0) {
-      // TODO: Navigate to entry detail or show entries list
-      console.log('Entries for', day.date, day.entries);
-    }
+  };
+
+  const handleEntryPress = (entry: DiaryEntry) => {
+    navigation.navigate('EntryDetail', { entry });
+  };
+
+  const handleDocumentPress = (document: Document) => {
+    navigation.navigate('DocumentDetail', { 
+      document: {
+        ...document,
+        date: document.date.toISOString(),
+        createdAt: document.createdAt.toISOString(),
+        updatedAt: document.updatedAt.toISOString(),
+      }
+    });
   };
 
   const monthNames = [
@@ -188,11 +226,14 @@ export default function CalendarScreen({ navigation }: any) {
         >
           {day.date.getDate()}
         </Text>
-        {day.hasEntry && (
-          <View style={styles.entryDot}>
-            <View style={styles.dot} />
-          </View>
-        )}
+        <View style={styles.indicatorsContainer}>
+          {day.hasEntry && (
+            <View style={styles.entryDot} />
+          )}
+          {day.hasDocument && (
+            <View style={styles.documentDot} />
+          )}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -247,22 +288,84 @@ export default function CalendarScreen({ navigation }: any) {
             </Text>
 
             {getEntriesForDate(selectedDate).length > 0 ? (
-              getEntriesForDate(selectedDate).map((entry) => (
-                <TouchableOpacity
-                  key={entry.id}
-                  style={styles.entryItem}
-                  onPress={() => {
-                    // TODO: Navigate to entry detail
-                  }}
-                >
-                  <Text style={styles.entryItemTitle}>{entry.title}</Text>
-                  <Text style={styles.entryItemContent} numberOfLines={2}>
-                    {entry.content}
-                  </Text>
-                </TouchableOpacity>
-              ))
-            ) : (
-              <Text style={styles.noEntriesText}>Ei merkintöjä tältä päivältä</Text>
+              <View>
+                <Text style={styles.sectionTitle}>Päiväkirjamerkinnät</Text>
+                {getEntriesForDate(selectedDate).map((entry) => (
+                  <TouchableOpacity
+                    key={entry.id}
+                    style={styles.entryItem}
+                    onPress={() => handleEntryPress(entry)}
+                  >
+                    <View style={styles.entryItemContent}>
+                      <View style={styles.entryTextContainer}>
+                        <Text style={styles.entryItemTitle}>{entry.title}</Text>
+                        <Text style={styles.entryItemPreview} numberOfLines={2}>
+                          {entry.content}
+                        </Text>
+                        <Text style={styles.entryItemTime}>
+                          {new Date(entry.date).toLocaleTimeString('fi-FI', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </Text>
+                      </View>
+                      {entry.images && entry.images.length > 0 && (
+                        <Image
+                          source={{ uri: entry.images[0] }}
+                          style={styles.entryThumbnail}
+                        />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+
+            {getDocumentsForDate(selectedDate).length > 0 ? (
+              <View style={{ marginTop: getEntriesForDate(selectedDate).length > 0 ? 16 : 0 }}>
+                <Text style={styles.sectionTitle}>Dokumentit</Text>
+                {getDocumentsForDate(selectedDate).map((doc) => (
+                  <TouchableOpacity
+                    key={doc.id}
+                    style={styles.documentItem}
+                    onPress={() => handleDocumentPress(doc)}
+                  >
+                    <View style={styles.documentItemContent}>
+                      <View style={styles.documentTextContainer}>
+                        <Text style={styles.documentItemTitle}>{doc.title}</Text>
+                        {doc.description && (
+                          <Text style={styles.documentItemDescription} numberOfLines={2}>
+                            {doc.description}
+                          </Text>
+                        )}
+                        <View style={styles.documentMeta}>
+                          <Text style={styles.documentCategory}>
+                            {doc.category === 'receipt' && '🧾 Kuitti'}
+                            {doc.category === 'contract' && '📄 Sopimus'}
+                            {doc.category === 'invoice' && '💰 Lasku'}
+                            {doc.category === 'certificate' && '🏆 Todistus'}
+                            {doc.category === 'other' && '📎 Muu'}
+                          </Text>
+                          <Text style={styles.documentType}>
+                            {doc.fileType.toUpperCase()}
+                          </Text>
+                        </View>
+                      </View>
+                      {doc.thumbnailUrl && (
+                        <Image
+                          source={{ uri: doc.thumbnailUrl }}
+                          style={styles.documentThumbnail}
+                        />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+
+            {getEntriesForDate(selectedDate).length === 0 && 
+             getDocumentsForDate(selectedDate).length === 0 && (
+              <Text style={styles.noEntriesText}>Ei merkintöjä tai dokumentteja tältä päivältä</Text>
             )}
           </View>
         )}
@@ -365,15 +468,23 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
   },
-  entryDot: {
+  indicatorsContainer: {
     position: 'absolute',
     bottom: 4,
+    flexDirection: 'row',
+    gap: 4,
   },
-  dot: {
+  entryDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: '#FF6B6B',
+  },
+  documentDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#9CA3AF',
   },
   selectedDateSection: {
     margin: 16,
@@ -393,20 +504,48 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   entryItem: {
-    padding: 12,
-    backgroundColor: '#f8f8f8',
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  entryItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
+    padding: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
   },
   entryItemContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  entryTextContainer: {
+    flex: 1,
+    marginRight: 12,
+  },
+  entryItemTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 6,
+  },
+  entryItemPreview: {
     fontSize: 14,
     color: '#666',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  entryItemTime: {
+    fontSize: 12,
+    color: '#999',
+  },
+  entryThumbnail: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
   },
   noEntriesText: {
     fontSize: 14,
@@ -414,5 +553,65 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     padding: 20,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  documentItem: {
+    padding: 16,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  documentItemContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  documentTextContainer: {
+    flex: 1,
+    marginRight: 12,
+  },
+  documentItemTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  documentItemDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+  },
+  documentMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  documentCategory: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  documentType: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  documentThumbnail: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: '#e0e0e0',
   },
 });

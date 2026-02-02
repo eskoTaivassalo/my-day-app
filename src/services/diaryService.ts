@@ -5,6 +5,8 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  getDoc,
+  setDoc,
   query,
   orderBy,
   where,
@@ -15,6 +17,7 @@ import { db, storage } from './firebase';
 import { DiaryEntry } from '../types/DiaryEntry';
 
 const ENTRIES_COLLECTION = 'diary_entries';
+const USERS_COLLECTION = 'users';
 
 /**
  * Upload an image to Firebase Storage
@@ -183,6 +186,56 @@ export const getEntriesInRange = async (
     return entries;
   } catch (error) {
     console.error('Error getting entries in range:', error);
+    throw error;
+  }
+};
+
+/**
+ * Upload profile image to Firebase Storage
+ */
+export const uploadProfileImage = async (uri: string, userId: string): Promise<string> => {
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+
+    const storageRef = ref(storage, `profile_images/${userId}/profile.jpg`);
+    await uploadBytes(storageRef, blob);
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    return downloadUrl;
+  } catch (error) {
+    console.error('Error uploading profile image:', error);
+    throw error;
+  }
+};
+
+/**
+ * Update user profile with photo URL
+ */
+export const updateUserProfile = async (userId: string, photoURL: string): Promise<void> => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    await setDoc(userRef, { photoURL, updatedAt: Timestamp.now() }, { merge: true });
+  } catch (error) {
+    console.error('Error updating user profile:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get user profile
+ */
+export const getUserProfile = async (userId: string): Promise<{ photoURL?: string } | null> => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    const userSnap = await getDoc(userRef);
+    
+    if (userSnap.exists()) {
+      return userSnap.data() as { photoURL?: string };
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting user profile:', error);
     throw error;
   }
 };

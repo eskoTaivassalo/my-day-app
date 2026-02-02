@@ -16,7 +16,7 @@ export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn } = useAuth();
+  const { signIn, signInWithGoogle } = useAuth();
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -36,7 +36,14 @@ export default function LoginScreen({ navigation }: any) {
   };
 
   const handleGoogleSignIn = async () => {
-    Alert.alert('Tulossa pian', 'Google-kirjautuminen lisätään seuraavaksi');
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (error: any) {
+      Alert.alert('Google-kirjautuminen epäonnistui', error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

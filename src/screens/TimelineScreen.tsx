@@ -9,21 +9,37 @@ import {
   RefreshControl,
   Alert,
   Animated,
+  TextInput,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { useAuth } from '../contexts/AuthContext';
-import { getEntries } from '../services/diaryService';
+import { getEntries, getUserProfile } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+
+  // Suodata merkinnät hakutermin perusteella
+  const filteredEntries = entries.filter((entry) => {
+    if (!searchQuery.trim()) return true;
+    
+    const query = searchQuery.toLowerCase();
+    const titleMatch = entry.title.toLowerCase().includes(query);
+    const contentMatch = entry.content.toLowerCase().includes(query);
+    const locationMatch = entry.location?.address?.toLowerCase().includes(query) || false;
+    
+    return titleMatch || contentMatch || locationMatch;
+  });
 
   useEffect(() => {
     if (user) {
       loadEntries();
+      loadUserProfile();
     }
   }, [user]);
 
@@ -32,9 +48,23 @@ export default function TimelineScreen({ navigation }: any) {
     React.useCallback(() => {
       if (user) {
         loadEntries();
+        loadUserProfile();
       }
     }, [user])
   );
+
+  const loadUserProfile = async () => {
+    if (!user) return;
+
+    try {
+      const profile = await getUserProfile(user.uid);
+      if (profile?.photoURL) {
+        setProfileImage(profile.photoURL);
+      }
+    } catch (error) {
+      console.error('Error loading user profile:', error);
+    }
+  };
 
   const loadEntries = async () => {
     if (!user) return;
@@ -52,27 +82,6 @@ export default function TimelineScreen({ navigation }: any) {
     setRefreshing(true);
     await loadEntries();
     setRefreshing(false);
-  };
-
-  const handleLogout = () => {
-    Alert.alert(
-      'Kirjaudu ulos',
-      'Haluatko varmasti kirjautua ulos?',
-      [
-        { text: 'Peruuta', style: 'cancel' },
-        {
-          text: 'Kirjaudu ulos',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await logout();
-            } catch (error) {
-              Alert.alert('Virhe', 'Uloskirjautuminen epäonnistui');
-            }
-          },
-        },
-      ]
-    );
   };
 
   const formatDate = (date: Date) => {
@@ -278,28 +287,54 @@ export default function TimelineScreen({ navigation }: any) {
             </Text>
           </View>
           <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
+            style={styles.profileButton}
+            onPress={() => navigation.navigate('Profile')}
           >
-            <Text style={styles.logoutIcon}>👋</Text>
+            {profileImage ? (
+              <Image source={{ uri: profileImage }} style={styles.profileImage} />
+            ) : (
+              <Text style={styles.profileIcon}>👤</Text>
+            )}
           </TouchableOpacity>
         </View>
-        
-        {user?.email && (
-          <View style={styles.userCard}>
-            <View style={styles.userAvatar}>
-              <Text style={styles.userAvatarText}>
-                {user.email.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <Text style={styles.userEmail}>{user.email}</Text>
-          </View>
+      </View>
+
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Hae merkinnöistä..."
+          placeholderTextColor="#999"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity
+            onPress={() => setSearchQuery('')}
+            style={styles.clearButton}
+          >
+            <Text style={styles.clearButtonText}>×</Text>
+          </TouchableOpacity>
         )}
       </View>
 
+      {/* Search Results Info */}
+      {searchQuery.trim() && (
+        <View style={styles.searchResultsInfo}>
+          <Text style={styles.searchResultsText}>
+            {filteredEntries.length === 0
+              ? 'Ei tuloksia'
+              : `${filteredEntries.length} ${filteredEntries.length === 1 ? 'tulos' : 'tulosta'}`}
+          </Text>
+        </View>
+      )}
+
       {/* Entries List */}
       <FlatList
-        data={entries}
+        data={filteredEntries}
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
@@ -314,18 +349,26 @@ export default function TimelineScreen({ navigation }: any) {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconContainer}>
-              <Text style={styles.emptyIcon}>📖</Text>
+              <Text style={styles.emptyIcon}>{searchQuery.trim() ? '🔍' : '📖'}</Text>
             </View>
-            <Text style={styles.emptyTitle}>Aloita päiväkirjan kirjoittaminen</Text>
-            <Text style={styles.emptySubtitle}>
-              Tallenna muistosi ja hetket helposti{'\n'}päivä kerrallaan
+            <Text style={styles.emptyTitle}>
+              {searchQuery.trim()
+                ? `Ei tuloksia haulle "${searchQuery}"`
+                : 'Aloita päiväkirjan kirjoittaminen'}
             </Text>
-            <TouchableOpacity
-              style={styles.emptyButton}
-              onPress={() => navigation.navigate('NewEntry')}
-            >
-              <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
-            </TouchableOpacity>
+            <Text style={styles.emptySubtitle}>
+              {searchQuery.trim()
+                ? 'Kokeile erilaista hakusanaa'
+                : 'Tallenna muistosi ja hetket helposti\npäivä kerrallaan'}
+            </Text>
+            {!searchQuery.trim() && (
+              <TouchableOpacity
+                style={styles.emptyButton}
+                onPress={() => navigation.navigate('NewEntry')}
+              >
+                <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
+              </TouchableOpacity>
+            )}
           </View>
         }
       />
@@ -371,42 +414,61 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     ...commonStyles.bodySecondary,
   },
-  logoutButton: {
+  profileButton: {
     width: 48,
     height: 48,
     borderRadius: borderRadius.full,
     backgroundColor: colors.gray100,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
   },
-  logoutIcon: {
+  profileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  profileIcon: {
     fontSize: 24,
   },
-  userCard: {
+  searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.gray50,
+    backgroundColor: colors.white,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    ...shadows.sm,
   },
-  userAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
+  searchIcon: {
+    fontSize: typography.fontSizes.lg,
     marginRight: spacing.sm,
   },
-  userAvatarText: {
-    color: colors.white,
-    fontSize: typography.fontSizes.md,
-    fontWeight: typography.fontWeights.bold,
-  },
-  userEmail: {
-    ...commonStyles.bodySecondary,
+  searchInput: {
     flex: 1,
+    paddingVertical: spacing.md,
+    fontSize: typography.fontSizes.md,
+    color: colors.text,
+  },
+  clearButton: {
+    padding: spacing.xs,
+  },
+  clearButtonText: {
+    fontSize: 24,
+    color: colors.textSecondary,
+    fontWeight: typography.fontWeights.bold
+  },
+  searchResultsInfo: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  searchResultsText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+    fontWeight: typography.fontWeights.medium,
   },
   listContent: {
     padding: spacing.md,

@@ -9,7 +9,11 @@ import {
   signInWithCredential,
 } from 'firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
 import { auth } from '../services/firebase';
+
+WebBrowser.maybeCompleteAuthSession();
 
 const AUTH_USER_KEY = '@my_day_auth_user';
 
@@ -97,9 +101,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signInWithGoogle = async () => {
-    // TODO: Implement Google Sign-In with expo-auth-session
-    console.log('Google Sign-In not yet implemented');
-    throw new Error('Google Sign-In will be implemented next');
+    try {
+      const clientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+      if (!clientId) {
+        throw new Error('Google Web Client ID not configured');
+      }
+
+      const redirectUri = AuthSession.makeRedirectUri();
+
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `client_id=${clientId}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+        `response_type=id_token&` +
+        `scope=openid%20profile%20email&` +
+        `nonce=${Math.random().toString(36)}`;
+
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+
+      if (result.type === 'success') {
+        const { url } = result;
+        const idToken = url.split('id_token=')[1]?.split('&')[0];
+
+        if (idToken) {
+          const credential = GoogleAuthProvider.credential(idToken);
+          await signInWithCredential(auth, credential);
+        } else {
+          throw new Error('No ID token found');
+        }
+      } else {
+        throw new Error('Authentication cancelled or failed');
+      }
+    } catch (error: any) {
+      console.error('Google Sign-In error:', error);
+      throw new Error(error.message);
+    }
   };
 
   const logout = async () => {

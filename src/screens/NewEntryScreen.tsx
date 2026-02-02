@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import { PhotoAsset } from '../types/DiaryEntry';
@@ -20,6 +21,8 @@ import { createEntry, uploadImages } from '../services/diaryService';
 export default function NewEntryScreen({ navigation }: any) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [recentPhotos, setRecentPhotos] = useState<PhotoAsset[]>([]);
   const [hasMediaPermission, setHasMediaPermission] = useState(false);
@@ -66,25 +69,15 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const pickImageFromGallery = async () => {
-    console.log('pickImageFromGallery called');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       quality: 0.8,
     });
 
-    console.log('Gallery picker result:', JSON.stringify(result, null, 2));
-    console.log('Result canceled?', result.canceled);
-    console.log('Result has assets?', result.assets ? 'yes' : 'no');
-
     if (!result.canceled && result.assets) {
       const newImages = result.assets.map((asset) => asset.uri);
-      console.log('New images from gallery:', newImages);
-      console.log('Current selectedImages before:', selectedImages);
       setSelectedImages([...selectedImages, ...newImages]);
-      console.log('Current selectedImages after:', [...selectedImages, ...newImages]);
-    } else {
-      console.log('Gallery selection was canceled or no assets');
     }
   };
 
@@ -107,13 +100,10 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const toggleRecentPhoto = (uri: string) => {
-    console.log('toggleRecentPhoto called with:', uri);
-    console.log('Current selectedImages:', selectedImages);
     if (selectedImages.includes(uri)) {
       setSelectedImages(selectedImages.filter((img) => img !== uri));
     } else {
       setSelectedImages([...selectedImages, uri]);
-      console.log('Added to selectedImages, new array:', [...selectedImages, uri]);
     }
   };
 
@@ -141,20 +131,17 @@ export default function NewEntryScreen({ navigation }: any) {
     try {
       // Upload images to Firebase Storage if any
       let imageUrls: string[] = [];
-      console.log('Saving entry with images:', selectedImages);
       if (selectedImages.length > 0) {
-        console.log('Uploading images to Firebase Storage...');
         imageUrls = await uploadImages(selectedImages, user.uid);
-        console.log('Image URLs from Firebase:', imageUrls);
       }
 
-      // Save entry to Firestore
+      // Save entry to Firestore with selected date
       await createEntry(
         {
           title: title.trim(),
           content: content.trim(),
           images: imageUrls,
-          date: new Date(),
+          date: selectedDate,
         },
         user.uid
       );
@@ -196,6 +183,40 @@ export default function NewEntryScreen({ navigation }: any) {
       </View>
 
       <ScrollView style={styles.content}>
+        {/* Date Selector */}
+        <View style={styles.dateSection}>
+          <Text style={styles.sectionTitle}>Päivämäärä</Text>
+          <TouchableOpacity 
+            style={styles.dateButton}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Text style={styles.dateButtonText}>📅</Text>
+            <Text style={styles.dateText}>
+              {selectedDate.toLocaleDateString('fi-FI', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {showDatePicker && (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(event, date) => {
+              setShowDatePicker(Platform.OS === 'ios');
+              if (date) {
+                setSelectedDate(date);
+              }
+            }}
+            maximumDate={new Date()}
+          />
+        )}
+
         {/* Title Input */}
         <TextInput
           style={styles.titleInput}
@@ -335,6 +356,26 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: 16,
+  },
+  dateSection: {
+    marginBottom: 16,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    padding: 16,
+    borderRadius: 12,
+    gap: 12,
+  },
+  dateButtonText: {
+    fontSize: 24,
+  },
+  dateText: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '500',
+    textTransform: 'capitalize',
   },
   titleInput: {
     fontSize: 24,
