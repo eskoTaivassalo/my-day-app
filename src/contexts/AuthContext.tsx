@@ -7,11 +7,14 @@ import {
   User,
   GoogleAuthProvider,
   signInWithCredential,
+  deleteUser,
 } from 'firebase/auth';
+import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { ref, listAll, deleteObject } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
-import { auth } from '../services/firebase';
+import { auth, db, storage } from '../services/firebase';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -24,6 +27,7 @@ interface AuthContextType {
   signUp: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -146,6 +150,92 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const deleteAccount = async () => {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        throw new Error('Ei kirjautunutta käyttäjää');
+      }
+
+      const userId = currentUser.uid;
+      console.log('Aloitetaan tilin poisto käyttäjälle:', userId);
+
+      // 1. Poista kaikki diary_entries
+      console.log('Poistetaan päiväkirjamerkinnät...');
+      const entriesQuery = query(
+        collection(db, 'diary_entries'),
+        where('userId', '==', userId)
+      );
+      const entriesSnapshot = await getDocs(entriesQuery);
+      const entryDeletePromises = entriesSnapshot.docs.map((docSnap) =>
+        deleteDoc(doc(db, 'diary_entries', docSnap.id))
+      );
+      await Promise.all(entryDeletePromises);
+      console.log(`Poistettu ${entriesSnapshot.size} päiväkirjamerkintää`);
+
+      // 2. Poista kaikki documents
+      console.log('Poistetaan dokumentit...');
+      const documentsQuery = query(
+        collection(db, 'documents'),
+        where('userId', '==', userId)
+      );
+      const documentsSnapshot = await getDocs(documentsQuery);
+      const documentDeletePromises = documentsSnapshot.docs.map((docSnap) =>
+        deleteDoc(doc(db, 'documents', docSnap.id))
+      );
+      await Promise.all(documentDeletePromises);
+      console.log(`Poistettu ${documentsSnapshot.size} dokumenttia`);
+
+      // 3. Poista käyttäjän profiili users-kokoelmasta
+      console.log('Poistetaan käyttäjäprofiili...');
+      try {
+        await deleteDoc(doc(db, 'users', userId));
+        console.log('Käyttäjäprofiili poistettu');
+      } catch (error) {
+        console.log('Ei käyttäjäprofiilia poistettavaksi');
+      }
+
+      // 4. Poista kuvat Storage:sta
+      console.log('Poistetaan kuvat...');
+      try {
+        const userImagesRef = ref(storage, `images/${userId}`);
+        const imagesList = await listAll(userImagesRef);
+        const imageDeletePromises = imagesList.items.map((itemRef) =>
+          deleteObject(itemRef)
+        );
+        await Promise.all(imageDeletePromises);
+        console.log(`Poistettu ${imagesList.items.length} kuvaa`);
+      } catch (error) {
+        console.log('Ei kuvia poistettavaksi tai virhe:', error);
+      }
+
+      // 5. Poista dokumentit Storage:sta
+      console.log('Poistetaan tallennetut dokumentit...');
+      try {
+        const userDocsRef = ref(storage, `documents/${userId}`);
+        const docsList = await listAll(userDocsRef);
+        const docDeletePromises = docsList.items.map((itemRef) =>
+          deleteObject(itemRef)
+        );
+        await Promise.all(docDeletePromises);
+        console.log(`Poistettu ${docsList.items.length} tiedostoa`);
+      } catch (error) {
+        console.log('Ei tiedostoja poistettavaksi tai virhe:', error);
+      }
+
+      // 6. Poista käyttäjätili Authentication:sta
+      console.log('Poistetaan käyttäjätili...');
+      await deleteUser(currentUser);
+      console.log('Käyttäjätili poistettu onnistuneesti');
+
+      // 7. Tyhjennä AsyncStorage
+      await AsyncStorage.removeItem(AUTH_USER_KEY);
+    } catch (error: any) {
+      console.error('Tilin poisto virhe:', error);
+      throw new Error(error.message);
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -155,6 +245,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signUp,
         signInWithGoogle,
         logout,
+        deleteAccount,
       }}
     >
       {children}

@@ -117,6 +117,7 @@ function AppNavigator() {
       />
       <Stack.Screen
         name="EntryDetail"
+        // @ts-expect-error - EntryDetailScreen uses custom Props type
         component={EntryDetailScreen}
         options={{
           headerShown: false,

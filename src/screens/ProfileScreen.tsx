@@ -16,7 +16,7 @@ import { DiaryEntry } from '../types/DiaryEntry';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function ProfileScreen({ navigation }: any) {
-  const { user, logout } = useAuth();
+  const { user, logout, deleteAccount } = useAuth();
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -150,6 +150,46 @@ export default function ProfileScreen({ navigation }: any) {
             } catch (error) {
               Alert.alert('Virhe', 'Uloskirjautuminen epäonnistui');
             }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Poista tili',
+      'Haluatko varmasti poistaa tilisi? Tämä poistaa KAIKKI tietosi pysyvästi (päiväkirjamerkinnät, dokumentit, kuvat). Tätä toimintoa EI VOI peruuttaa!',
+      [
+        { text: 'Peruuta', style: 'cancel' },
+        {
+          text: 'Poista tili',
+          style: 'destructive',
+          onPress: () => {
+            // Kaksoisvarmistus
+            Alert.alert(
+              'Viimeinen varmistus',
+              'Oletko TÄYSIN VARMA? Kaikki tietosi poistetaan pysyvästi.',
+              [
+                { text: 'Peruuta', style: 'cancel' },
+                {
+                  text: 'Kyllä, poista',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      Alert.alert('Poistetaan...', 'Odota hetki, tili poistetaan.');
+                      await deleteAccount();
+                      Alert.alert('Valmis', 'Tilisi on poistettu.');
+                    } catch (error: any) {
+                      Alert.alert(
+                        'Virhe',
+                        error.message || 'Tilin poistaminen epäonnistui. Kokeile kirjautua uudelleen ja yritä sitten uudestaan.'
+                      );
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]
@@ -439,6 +479,11 @@ export default function ProfileScreen({ navigation }: any) {
             <Text style={styles.logoutIcon}>👋</Text>
             <Text style={styles.logoutText}>Kirjaudu ulos</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
+            <Text style={styles.deleteIcon}>⚠️</Text>
+            <Text style={styles.deleteText}>Poista tili</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.footer}>
@@ -724,6 +769,27 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSizes.md,
     fontWeight: typography.fontWeights.semibold,
     color: colors.error,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffebee',
+    padding: spacing.lg,
+    borderRadius: borderRadius.lg,
+    borderWidth: 2,
+    borderColor: '#c62828',
+    marginTop: spacing.md,
+    ...shadows.sm,
+  },
+  deleteIcon: {
+    fontSize: 24,
+    marginRight: spacing.sm,
+  },
+  deleteText: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: '#c62828',
   },
   footer: {
     alignItems: 'center',
