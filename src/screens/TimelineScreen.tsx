@@ -1,28 +1,69 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   Image,
   RefreshControl,
   Alert,
   Animated,
   TextInput,
+  Dimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { useAuth } from '../contexts/AuthContext';
 import { getEntries, getUserProfile } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
+import AchievementToast from '../components/AchievementToast';
+import { sendAchievementNotification } from '../services/notificationService';
+import {
+  getUnlockedAchievementIds,
+  addUnlockedAchievement,
+} from '../services/achievementStorageService';
+import {
+  calculateStats,
+  getNextAchievement,
+  getProgressToNext,
+  checkNewAchievements,
+  Achievement,
+  Stats,
+} from '../utils/achievementUtils';
+
+const { width } = Dimensions.get('window');
+type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [stats, setStats] = useState<Stats>({
+    totalEntries: 0,
+    totalImages: 0,
+    longestStreak: 0,
+    currentStreak: 0,
+    firstEntryDate: null,
+    totalWords: 0,
+    multiDayCount: 0,
+    sharedCount: 0,
+    entriesWithLocation: 0,
+    earlyBirdCount: 0,
+    nightOwlCount: 0,
+    weekendCount: 0,
+    maxImagesInEntry: 0,
+  });
+  const [achievementToast, setAchievementToast] = useState<Achievement | null>(null);
+  const [showToast, setShowToast] = useState(false);
+  const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
   const { user } = useAuth();
+  
+  // Muista viimeiset tilastot joista näytettiin toast
+  const lastProcessedStats = useRef<Stats | null>(null);
 
   // Suodata merkinnät hakutermin perusteella
   const filteredEntries = entries.filter((entry) => {
@@ -38,7 +79,11 @@ export default function TimelineScreen({ navigation }: any) {
 
   useEffect(() => {
     if (user) {
-      loadEntries();
+      // Ladataan saavutukset ENSIN, sitten vasta entries
+      // Näin unlockedAchievementIds on päivitetty ennen saavutusten tarkistusta
+      loadUnlockedAchievements().then((ids) => {
+        loadEntries(ids);
+      });
       loadUserProfile();
     }
   }, [user]);
@@ -47,11 +92,28 @@ export default function TimelineScreen({ navigation }: any) {
   useFocusEffect(
     React.useCallback(() => {
       if (user) {
-        loadEntries();
+        // Lataa saavutukset ensin, sitten entries
+        loadUnlockedAchievements().then((ids) => {
+          loadEntries(ids);
+        });
         loadUserProfile();
       }
     }, [user])
   );
+
+  const loadUnlockedAchievements = async (): Promise<number[]> => {
+    if (!user) return [];
+    
+    try {
+      const ids = await getUnlockedAchievementIds(user.uid);
+      setUnlockedAchievementIds(ids);
+      console.log(`Loaded ${ids.length} previously unlocked achievements`);
+      return ids;
+    } catch (error) {
+      console.error('Error loading unlocked achievements:', error);
+      return [];
+    }
+  };
 
   const loadUserProfile = async () => {
     if (!user) return;
@@ -66,11 +128,69 @@ export default function TimelineScreen({ navigation }: any) {
     }
   };
 
-  const loadEntries = async () => {
+  const loadEntries = async (unlockedIds?: number[]) => {
     if (!user) return;
+    
+    // Use provided IDs or fall back to state (for refresh scenarios)
+    const previouslyUnlockedIds = unlockedIds !== undefined ? unlockedIds : unlockedAchievementIds;
     
     try {
       const userEntries = await getEntries(user.uid);
+      console.log('TimelineScreen - Loaded entries:', userEntries.length);
+      console.log('Entries with shared=true:', userEntries.filter(e => e.shared).length);
+      console.log('Previously unlocked achievements:', previouslyUnlockedIds.length);
+      
+      // Calculate new stats
+      const newStats = calculateStats(userEntries);
+      
+      // Check for new achievements based on current stats
+      // Compare with previously unlocked achievement IDs stored in AsyncStorage
+      const allPossibleAchievements = checkNewAchievements(
+        { totalEntries: 0, totalImages: 0, longestStreak: 0, currentStreak: 0, firstEntryDate: null, totalWords: 0, multiDayCount: 0, sharedCount: 0, entriesWithLocation: 0, earlyBirdCount: 0, nightOwlCount: 0, weekendCount: 0, maxImagesInEntry: 0 },
+        newStats
+      );
+      
+      // Filter out achievements that were already unlocked (saved in AsyncStorage)
+      const newAchievements = allPossibleAchievements.filter(
+        achievement => !previouslyUnlockedIds.includes(achievement.id)
+      );
+      
+      console.log('All possible achievements:', allPossibleAchievements.map(a => a.id));
+      console.log('New achievements to show:', newAchievements.map(a => a.id));
+      
+      if (newAchievements.length > 0 && user) {
+        // Update ref to prevent showing same toasts again
+        lastProcessedStats.current = newStats;
+        
+        // Save newly unlocked achievements to AsyncStorage
+        for (const achievement of newAchievements) {
+          await addUnlockedAchievement(user.uid, achievement.id);
+        }
+        
+        // Update local state
+        setUnlockedAchievementIds(prev => [...prev, ...newAchievements.map(a => a.id)]);
+        
+        // Show toast for the first new achievement
+        setAchievementToast(newAchievements[0]);
+        setShowToast(true);
+        
+        // Send notification for first achievement
+        sendAchievementNotification(newAchievements[0].name, newAchievements[0].description);
+        
+        // If there are multiple achievements, show them one by one
+        if (newAchievements.length > 1) {
+          for (let i = 1; i < Math.min(3, newAchievements.length); i++) {
+            setTimeout(() => {
+              setAchievementToast(newAchievements[i]);
+              setShowToast(true);
+              // Send notification for additional achievements
+              sendAchievementNotification(newAchievements[i].name, newAchievements[i].description);
+            }, i * 5500); // 5.5 second delay between each toast
+          }
+        }
+      }
+      
+      setStats(newStats);
       setEntries(userEntries);
     } catch (error) {
       console.error('Error loading entries:', error);
@@ -80,7 +200,8 @@ export default function TimelineScreen({ navigation }: any) {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadEntries();
+    const ids = await loadUnlockedAchievements();
+    await loadEntries(ids);
     setRefreshing(false);
   };
 
@@ -106,6 +227,122 @@ export default function TimelineScreen({ navigation }: any) {
     return formatDate(date);
   };
 
+  const renderImages = (images: string[], layout: LayoutType = 'grid', title?: string, content?: string) => {
+    if (images.length === 0) return null;
+
+    // Pienennä kokoja timelinelle
+    const cardWidth = width - spacing.lg * 2;
+
+    switch (layout) {
+      case 'grid':
+        return (
+          <View style={styles.timelineGridContainer}>
+            {images.slice(0, 4).map((uri, index) => (
+              <View key={index} style={styles.timelineGridImageWrapper}>
+                <Image source={{ uri }} style={styles.timelineGridImage} resizeMode="cover" />
+                {images.length > 4 && index === 3 && (
+                  <View style={styles.moreImagesOverlay}>
+                    <Text style={styles.moreImagesText}>+{images.length - 4}</Text>
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        );
+
+      case 'masonry':
+        const heights = [120, 160, 130, 170, 125, 145];
+        return (
+          <View style={styles.timelineMasonryContainer}>
+            <View style={styles.timelineMasonryColumn}>
+              {images.slice(0, 3).filter((_, i) => i % 2 === 0).map((uri, index) => {
+                const actualIndex = index * 2;
+                const height = heights[actualIndex % heights.length];
+                return (
+                  <View key={actualIndex} style={[styles.timelineMasonryImageWrapper, { height }]}>
+                    <Image source={{ uri }} style={styles.timelineMasonryImage} resizeMode="cover" />
+                  </View>
+                );
+              })}
+            </View>
+            <View style={styles.timelineMasonryColumn}>
+              {images.slice(0, 3).filter((_, i) => i % 2 === 1).map((uri, index) => {
+                const actualIndex = index * 2 + 1;
+                const height = heights[actualIndex % heights.length];
+                return (
+                  <View key={actualIndex} style={[styles.timelineMasonryImageWrapper, { height }]}>
+                    <Image source={{ uri }} style={styles.timelineMasonryImage} resizeMode="cover" />
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        );
+
+      case 'magazine':
+        return (
+          <View style={styles.timelineMagazineContainer}>
+            {images[0] && (
+              <View style={styles.timelineMagazineLargeWrapper}>
+                <Image source={{ uri: images[0] }} style={styles.timelineMagazineLarge} resizeMode="cover" />
+              </View>
+            )}
+            {images.length > 1 && (
+              <View style={styles.timelineMagazineSmallRow}>
+                {images.slice(1, 4).map((uri, index) => (
+                  <View key={index + 1} style={styles.timelineMagazineSmallWrapper}>
+                    <Image source={{ uri }} style={styles.timelineMagazineSmall} resizeMode="cover" />
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+
+      case 'framed':
+        return (
+          <View style={styles.timelineFramedContainer}>
+            {images.slice(0, 2).map((uri, index) => (
+              <View key={index} style={styles.timelineFramedImageWrapper}>
+                <View style={styles.timelineWoodFrame}>
+                  <Image source={{ uri }} style={styles.timelineFramedImage} resizeMode="cover" />
+                </View>
+              </View>
+            ))}
+          </View>
+        );
+
+      case 'overlay':
+        return (
+          <View style={styles.timelineOverlayContainer}>
+            {images[0] && (
+              <View style={styles.timelineOverlayWrapper}>
+                <Image source={{ uri: images[0] }} style={styles.timelineOverlayImage} resizeMode="cover" />
+                
+                {/* Text overlay like in EntryDetailScreen */}
+                <View style={styles.timelineOverlayTextContainer}>
+                  {title && <Text style={styles.timelineOverlayTitle} numberOfLines={2}>{title}</Text>}
+                  {content && <Text style={styles.timelineOverlayContent} numberOfLines={3}>{content}</Text>}
+                </View>
+              </View>
+            )}
+          </View>
+        );
+
+      case 'full':
+      default:
+        return (
+          <View style={styles.timelineFullContainer}>
+            {images.slice(0, 2).map((uri, index) => (
+              <View key={index} style={styles.timelineFullImageWrapper}>
+                <Image source={{ uri }} style={styles.timelineFullImage} resizeMode="cover" />
+              </View>
+            ))}
+          </View>
+        );
+    }
+  };
+
   const renderEntry = ({ item }: { item: DiaryEntry }) => {
     // Text Overlay Mode
     if (item.textOverlay && item.images.length > 0) {
@@ -115,8 +352,12 @@ export default function TimelineScreen({ navigation }: any) {
             activeOpacity={0.7}
             onPress={() => {
               navigation.navigate('EntryDetail', {
-                entry: item,
-                onUpdate: loadEntries,
+                entry: {
+                  ...item,
+                  date: item.date instanceof Date ? item.date.toISOString() : item.date,
+                  createdAt: item.createdAt instanceof Date ? item.createdAt.toISOString() : item.createdAt,
+                  updatedAt: item.updatedAt instanceof Date ? item.updatedAt.toISOString() : item.updatedAt,
+                },
               });
             }}
           >
@@ -162,7 +403,7 @@ export default function TimelineScreen({ navigation }: any) {
                     <View style={styles.locationContainer}>
                       <Text style={styles.locationIcon}>📍</Text>
                       <Text style={[styles.locationText, { color: colors.white }]} numberOfLines={1}>
-                        {item.location.address}
+                        {item.location.address || `${item.location.latitude.toFixed(4)}, ${item.location.longitude.toFixed(4)}`}
                       </Text>
                     </View>
                   )}
@@ -182,6 +423,49 @@ export default function TimelineScreen({ navigation }: any) {
       );
     }
 
+    // Overlay Mode - show only image with text overlay, no separate title/content
+    if (item.layout === 'overlay' && item.images.length > 0) {
+      return (
+        <TouchableOpacity
+          style={styles.entryCard}
+          activeOpacity={0.7}
+          onPress={() => {
+            navigation.navigate('EntryDetail', {
+              entry: {
+                ...item,
+                date: item.date instanceof Date ? item.date.toISOString() : item.date,
+                createdAt: item.createdAt instanceof Date ? item.createdAt.toISOString() : item.createdAt,
+                updatedAt: item.updatedAt instanceof Date ? item.updatedAt.toISOString() : item.updatedAt,
+              },
+            });
+          }}
+        >
+          {/* Only render images with overlay - no separate title/content */}
+          {renderImages(item.images, item.layout, item.title, item.content)}
+
+          {/* Entry Footer */}
+          <View style={styles.entryFooter}>
+            {item.location && (
+              <View style={styles.locationContainer}>
+                <Text style={styles.locationIcon}>📍</Text>
+                <Text style={styles.locationText} numberOfLines={1}>
+                  {item.location.address || `${item.location.latitude.toFixed(4)}, ${item.location.longitude.toFixed(4)}`}
+                </Text>
+              </View>
+            )}
+            <View style={styles.entryStats}>
+              {item.images.length > 0 && (
+                <View style={styles.stat}>
+                  <Text style={styles.statIcon}>📷</Text>
+                  <Text style={styles.statText}>{item.images.length}</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
     // Normal Mode
     return (
     <View style={styles.entryCard}>
@@ -189,8 +473,12 @@ export default function TimelineScreen({ navigation }: any) {
         activeOpacity={0.7}
         onPress={() => {
           navigation.navigate('EntryDetail', {
-            entry: item,
-            onUpdate: loadEntries,
+            entry: {
+              ...item,
+              date: item.date instanceof Date ? item.date.toISOString() : item.date,
+              createdAt: item.createdAt instanceof Date ? item.createdAt.toISOString() : item.createdAt,
+              updatedAt: item.updatedAt instanceof Date ? item.updatedAt.toISOString() : item.updatedAt,
+            },
           });
         }}
       >
@@ -220,36 +508,8 @@ export default function TimelineScreen({ navigation }: any) {
           {item.content}
         </Text>
 
-        {/* Images Grid */}
-        {item.images.length > 0 && (
-          <View style={styles.imagesGrid}>
-            {item.images.slice(0, 4).map((imageUri, imgIndex) => (
-              <View
-                key={imgIndex}
-                style={[
-                  styles.imageWrapper,
-                  item.images.length === 1 && styles.singleImage,
-                  item.images.length >= 2 && styles.multiImage,
-                  // Apply image shape from entry settings
-                  item.imageShape === 'circle' && styles.circleImageWrapper,
-                  item.imageShape === 'landscape' && styles.landscapeImageWrapper,
-                ]}
-              >
-                <Image
-                  source={{ uri: imageUri }}
-                  style={styles.image}
-                />
-                {item.images.length > 4 && imgIndex === 3 && (
-                  <View style={styles.moreImagesOverlay}>
-                    <Text style={styles.moreImagesText}>
-                      +{item.images.length - 4}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
+        {/* Images with layout */}
+        {item.images.length > 0 && renderImages(item.images, item.layout || 'grid', item.title, item.content)}
 
         {/* Entry Footer */}
         <View style={styles.entryFooter}>
@@ -257,7 +517,7 @@ export default function TimelineScreen({ navigation }: any) {
             <View style={styles.locationContainer}>
               <Text style={styles.locationIcon}>📍</Text>
               <Text style={styles.locationText} numberOfLines={1}>
-                {item.location.address}
+                {item.location.address || `${item.location.latitude.toFixed(4)}, ${item.location.longitude.toFixed(4)}`}
               </Text>
             </View>
           )}
@@ -277,15 +537,34 @@ export default function TimelineScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
+      {/* Achievement Toast */}
+      <AchievementToast
+        achievement={achievementToast}
+        visible={showToast}
+        onHide={() => {
+          setShowToast(false);
+          setAchievementToast(null);
+        }}
+      />
+
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.headerTitle}>Päiväkirjani</Text>
-            <Text style={styles.headerSubtitle}>
-              {entries.length} {entries.length === 1 ? 'merkintä' : 'merkintää'}
-            </Text>
-          </View>
+          <Text style={styles.headerTitle}>Päiväkirjani</Text>
+          
+          {/* Search Icon */}
+          <TouchableOpacity
+            style={styles.searchIconButton}
+            onPress={() => {
+              setShowSearch(!showSearch);
+              if (showSearch) {
+                setSearchQuery('');
+              }
+            }}
+          >
+            <Text style={styles.searchIconText}>🔍</Text>
+          </TouchableOpacity>
+          
           <TouchableOpacity
             style={styles.profileButton}
             onPress={() => navigation.navigate('Profile')}
@@ -297,40 +576,88 @@ export default function TimelineScreen({ navigation }: any) {
             )}
           </TouchableOpacity>
         </View>
-      </View>
-
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Hae merkinnöistä..."
-          placeholderTextColor="#999"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity
-            onPress={() => setSearchQuery('')}
-            style={styles.clearButton}
-          >
-            <Text style={styles.clearButtonText}>×</Text>
-          </TouchableOpacity>
+        
+        {/* Search Input - Toggleable */}
+        {showSearch && (
+          <View style={styles.searchInputContainer}>
+            <TextInput
+              style={styles.searchInputField}
+              placeholder="Hae merkinnöistä..."
+              placeholderTextColor="#999"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setSearchQuery('')}
+                style={styles.clearButton}
+              >
+                <Text style={styles.clearButtonText}>×</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         )}
       </View>
 
-      {/* Search Results Info */}
-      {searchQuery.trim() && (
-        <View style={styles.searchResultsInfo}>
-          <Text style={styles.searchResultsText}>
-            {filteredEntries.length === 0
-              ? 'Ei tuloksia'
-              : `${filteredEntries.length} ${filteredEntries.length === 1 ? 'tulos' : 'tulosta'}`}
-          </Text>
-        </View>
-      )}
+      {/* Achievements Section - Horizontal Scroll */}
+      {(() => {
+        const nextAchievement = getNextAchievement(stats);
+        const progress = getProgressToNext(stats);
+        
+        return (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.achievementsScroll}
+            style={styles.achievementsContainer}
+          >
+            {/* Current Streak Card */}
+            <View style={styles.achievementCard}>
+              <Text style={styles.achievementCardIcon}>🔥</Text>
+              <Text style={styles.achievementCardValue}>{stats.currentStreak}</Text>
+              <Text style={styles.achievementCardLabel}>päivän putki</Text>
+            </View>
+
+            {/* Next Achievement Card */}
+            {nextAchievement && (
+              <View style={[styles.achievementCard, styles.nextAchievementCardCompact]}>
+                <Text style={styles.achievementCardIcon}>{nextAchievement.icon}</Text>
+                <Text style={styles.achievementCardTitle} numberOfLines={1}>
+                  {nextAchievement.name}
+                </Text>
+                <View style={styles.progressBarContainerCompact}>
+                  <View style={[styles.progressBarCompact, { width: `${progress.progress}%` }]} />
+                </View>
+                <Text style={styles.achievementCardProgress}>
+                  {progress.current} / {progress.target}
+                </Text>
+              </View>
+            )}
+
+            {/* Stats Cards */}
+            <View style={styles.achievementCard}>
+              <Text style={styles.achievementCardIcon}>📝</Text>
+              <Text style={styles.achievementCardValue}>{stats.totalEntries}</Text>
+              <Text style={styles.achievementCardLabel}>merkintää</Text>
+            </View>
+
+            <View style={styles.achievementCard}>
+              <Text style={styles.achievementCardIcon}>📷</Text>
+              <Text style={styles.achievementCardValue}>{stats.totalImages}</Text>
+              <Text style={styles.achievementCardLabel}>kuvaa</Text>
+            </View>
+
+            <View style={styles.achievementCard}>
+              <Text style={styles.achievementCardIcon}>🏆</Text>
+              <Text style={styles.achievementCardValue}>{stats.longestStreak}</Text>
+              <Text style={styles.achievementCardLabel}>pisin putki</Text>
+            </View>
+          </ScrollView>
+        );
+      })()}
 
       {/* Entries List */}
       <FlatList
@@ -405,7 +732,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.md,
   },
   headerTitle: {
     ...commonStyles.heading1,
@@ -413,6 +739,39 @@ const styles = StyleSheet.create({
   },
   headerSubtitle: {
     ...commonStyles.bodySecondary,
+  },
+  searchIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.sm,
+  },
+  searchIconText: {
+    fontSize: 20,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gray50,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  searchInputField: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    fontSize: typography.fontSizes.md,
+    color: colors.text,
+  },
+  clearButton: {
+    padding: spacing.xs,
+  },
+  clearButtonText: {
+    fontSize: 24,
+    color: colors.textSecondary,
   },
   profileButton: {
     width: 48,
@@ -430,45 +789,68 @@ const styles = StyleSheet.create({
   profileIcon: {
     fontSize: 24,
   },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.white,
-    marginHorizontal: spacing.lg,
+  achievementsContainer: {
     marginTop: spacing.md,
     marginBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    ...shadows.sm,
+    height: 170,
   },
-  searchIcon: {
-    fontSize: typography.fontSizes.lg,
-    marginRight: spacing.sm,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: spacing.md,
-    fontSize: typography.fontSizes.md,
-    color: colors.text,
-  },
-  clearButton: {
-    padding: spacing.xs,
-  },
-  clearButtonText: {
-    fontSize: 24,
-    color: colors.textSecondary,
-    fontWeight: typography.fontWeights.bold
-  },
-  searchResultsInfo: {
+  achievementsScroll: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
+    gap: spacing.md,
   },
-  searchResultsText: {
-    fontSize: typography.fontSizes.sm,
+  achievementCard: {
+    width: 105,
+    height: 100,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.xl,
+    padding: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.sm,
+    borderWidth: 1,
+    borderColor: colors.gray100,
+  },
+  achievementCardIcon: {
+    fontSize: 28,
+    marginBottom: spacing.xs,
+  },
+  achievementCardValue: {
+    fontSize: typography.fontSizes.xxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.primary,
+  },
+  achievementCardLabel: {
+    fontSize: typography.fontSizes.xs,
     color: colors.textSecondary,
-    fontWeight: typography.fontWeights.medium,
+    textAlign: 'center',
+  },
+  nextAchievementCardCompact: {
+    width: 135,
+    height: 100,
+  },
+  achievementCardTitle: {
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  progressBarContainerCompact: {
+    width: '100%',
+    height: 4,
+    backgroundColor: colors.gray200,
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+    marginVertical: spacing.xs,
+  },
+  progressBarCompact: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.full,
+  },
+  achievementCardProgress: {
+    fontSize: typography.fontSizes.xs,
+    color: colors.textSecondary,
   },
   listContent: {
     padding: spacing.md,
@@ -678,5 +1060,170 @@ const styles = StyleSheet.create({
   },
   fabIcon: {
     fontSize: 28,
+  },
+
+  // Timeline Layout Styles
+  timelineGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  timelineGridImageWrapper: {
+    position: 'relative',
+    width: (width - spacing.lg * 2 - spacing.xs) / 2,
+    height: 120,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  timelineGridImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  timelineMasonryContainer: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  timelineMasonryColumn: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  timelineMasonryImageWrapper: {
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  timelineMasonryImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  timelineMagazineContainer: {
+    marginBottom: spacing.md,
+  },
+  timelineMagazineLargeWrapper: {
+    height: 200,
+    marginBottom: spacing.xs,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  timelineMagazineLarge: {
+    width: '100%',
+    height: '100%',
+  },
+  timelineMagazineSmallRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  timelineMagazineSmallWrapper: {
+    flex: 1,
+    height: 80,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  timelineMagazineSmall: {
+    width: '100%',
+    height: '100%',
+  },
+
+  timelineFullContainer: {
+    marginBottom: spacing.md,
+  },
+  timelineFullImageWrapper: {
+    marginBottom: spacing.xs,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  timelineFullImage: {
+    width: '100%',
+    height: 180,
+  },
+
+  timelineFramedContainer: {
+    marginBottom: spacing.md,
+  },
+  timelineFramedImageWrapper: {
+    marginBottom: spacing.md,
+    alignItems: 'center',
+  },
+  timelineWoodFrame: {
+    padding: 10,
+    backgroundColor: '#8B4513',
+    borderRadius: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    borderWidth: 2,
+    borderColor: '#654321',
+  },
+  timelineFramedImage: {
+    width: width - spacing.lg * 3 - 20,
+    height: 200,
+    borderWidth: 1,
+    borderColor: '#DEB887',
+  },
+
+  // Overlay Layout
+  timelineOverlayContainer: {
+    marginBottom: spacing.md,
+  },
+  timelineOverlayWrapper: {
+    position: 'relative',
+    height: 250,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+  },
+  timelineOverlayImage: {
+    width: '100%',
+    height: '100%',
+  },
+  timelineOverlayGradient: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '60%',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  timelineOverlayTextContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: spacing.lg,
+  },
+  timelineOverlayTitle: {
+    color: colors.white,
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    marginBottom: spacing.sm,
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  timelineOverlayContent: {
+    color: colors.white,
+    fontSize: typography.fontSizes.md,
+    lineHeight: typography.fontSizes.md * 1.5,
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  timelineOverlayBadge: {
+    position: 'absolute',
+    top: spacing.md,
+    right: spacing.md,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.full,
+  },
+  timelineOverlayBadgeText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
   },
 });

@@ -8,18 +8,31 @@ import {
   Alert,
   Image,
   ActivityIndicator,
+  Switch,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { getEntries, uploadProfileImage, updateUserProfile, getUserProfile } from '../services/diaryService';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
+import {
+  getNotificationSettings,
+  saveNotificationSettings,
+  scheduleDailyReminders,
+  requestNotificationPermissions,
+  NotificationSettings,
+} from '../services/notificationService';
 
 export default function ProfileScreen({ navigation }: any) {
   const { user, logout, deleteAccount } = useAuth();
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
+    enabled: true,
+    dailyReminderTime: '20:00',
+    reminderDays: [0, 1, 2, 3, 4, 5, 6],
+  });
   const [stats, setStats] = useState({
     totalEntries: 0,
     totalImages: 0,
@@ -32,6 +45,7 @@ export default function ProfileScreen({ navigation }: any) {
     if (user) {
       loadStats();
       loadUserProfile();
+      loadNotificationSettings();
     }
   }, [user]);
 
@@ -45,6 +59,45 @@ export default function ProfileScreen({ navigation }: any) {
       }
     } catch (error) {
       console.error('Error loading user profile:', error);
+    }
+  };
+
+  const loadNotificationSettings = async () => {
+    try {
+      const settings = await getNotificationSettings();
+      setNotificationSettings(settings);
+    } catch (error) {
+      console.error('Error loading notification settings:', error);
+    }
+  };
+
+  const toggleNotifications = async (enabled: boolean) => {
+    try {
+      if (enabled) {
+        const hasPermission = await requestNotificationPermissions();
+        if (!hasPermission) {
+          Alert.alert(
+            'Lupa vaaditaan',
+            'Ilmoitusten käyttö vaatii luvan. Voit myöntää luvan laitteen asetuksista.'
+          );
+          return;
+        }
+      }
+
+      const newSettings = { ...notificationSettings, enabled };
+      setNotificationSettings(newSettings);
+      await saveNotificationSettings(newSettings);
+      await scheduleDailyReminders(newSettings);
+
+      Alert.alert(
+        'Asetukset tallennettu',
+        enabled
+          ? `Päivittäinen muistutus ajastettu klo ${notificationSettings.dailyReminderTime}`
+          : 'Ilmoitukset poistettu käytöstä'
+      );
+    } catch (error) {
+      console.error('Error toggling notifications:', error);
+      Alert.alert('Virhe', 'Ilmoitusasetusten päivitys epäonnistui');
     }
   };
 
@@ -206,7 +259,7 @@ export default function ProfileScreen({ navigation }: any) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -241,89 +294,6 @@ export default function ProfileScreen({ navigation }: any) {
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
-  // Tavoitteet ja palkinnot
-  const achievements = [
-    { id: 1, name: 'Ensimmäinen askel', icon: '🎖️', requirement: 1, type: 'streak', description: 'Kirjoita ensimmäinen merkintäsi' },
-    { id: 2, name: 'Sitoutunut', icon: '🔥', requirement: 3, type: 'streak', description: '3 päivän putki' },
-    { id: 3, name: 'Viikon voittaja', icon: '⭐', requirement: 7, type: 'streak', description: '7 päivän putki' },
-    { id: 4, name: 'Kuukauden mestari', icon: '🏆', requirement: 30, type: 'streak', description: '30 päivän putki' },
-    { id: 5, name: 'Kirjoittaja', icon: '✍️', requirement: 10, type: 'entries', description: '10 merkintää' },
-    { id: 6, name: 'Tarinankertoija', icon: '📖', requirement: 50, type: 'entries', description: '50 merkintää' },
-    { id: 7, name: 'Muistelija', icon: '📚', requirement: 100, type: 'entries', description: '100 merkintää' },
-    { id: 8, name: 'Valokuvaaja', icon: '📷', requirement: 50, type: 'images', description: '50 kuvaa' },
-  ];
-
-  const getUnlockedAchievements = () => {
-    return achievements.filter(achievement => {
-      if (achievement.type === 'streak') {
-        return stats.longestStreak >= achievement.requirement;
-      } else if (achievement.type === 'entries') {
-        return stats.totalEntries >= achievement.requirement;
-      } else if (achievement.type === 'images') {
-        return stats.totalImages >= achievement.requirement;
-      }
-      return false;
-    });
-  };
-
-  const getNextAchievement = () => {
-    const locked = achievements.filter(achievement => {
-      if (achievement.type === 'streak') {
-        return stats.longestStreak < achievement.requirement;
-      } else if (achievement.type === 'entries') {
-        return stats.totalEntries < achievement.requirement;
-      } else if (achievement.type === 'images') {
-        return stats.totalImages < achievement.requirement;
-      }
-      return true;
-    }).sort((a, b) => a.requirement - b.requirement);
-    
-    return locked[0];
-  };
-
-  const getProgressToNext = () => {
-    const next = getNextAchievement();
-    if (!next) return { progress: 100, current: 0, target: 0 };
-    
-    let current = 0;
-    if (next.type === 'streak') {
-      current = stats.currentStreak;
-    } else if (next.type === 'entries') {
-      current = stats.totalEntries;
-    } else if (next.type === 'images') {
-      current = stats.totalImages;
-    }
-    
-    const progress = Math.min((current / next.requirement) * 100, 100);
-    return { progress, current, target: next.requirement };
-  };
-
-  const getMotivationalMessage = () => {
-    const { current } = getProgressToNext();
-    const next = getNextAchievement();
-    
-    if (!next) return 'Olet saavuttanut kaikki tavoitteet! 🎉';
-    
-    const remaining = next.requirement - current;
-    
-    if (next.type === 'streak') {
-      if (stats.currentStreak === 0) {
-        return 'Aloita uusi putki kirjoittamalla tänään! 🚀';
-      }
-      return `Hieno putki! Vielä ${remaining} päivää tavoitteeseen "${next.name}" 🔥`;
-    } else if (next.type === 'entries') {
-      return `Kirjoita vielä ${remaining} merkintää saavuttaaksesi "${next.name}" ✨`;
-    } else if (next.type === 'images') {
-      return `Lisää vielä ${remaining} kuvaa saavuttaaksesi "${next.name}" 📸`;
-    }
-    
-    return 'Jatka hyvää työtä! 💪';
-  };
-
-  const unlockedAchievements = getUnlockedAchievements();
-  const nextAchievement = getNextAchievement();
-  const progressData = getProgressToNext();
-
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -331,7 +301,7 @@ export default function ProfileScreen({ navigation }: any) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Text style={styles.backButtonText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profiili</Text>
+        <Text style={styles.headerTitle}>✨ Päiväkirjani</Text>
         <View style={styles.backButton} />
       </View>
 
@@ -405,71 +375,49 @@ export default function ProfileScreen({ navigation }: any) {
           )}
         </View>
 
-        {/* Seuraava tavoite */}
-        {nextAchievement && (
-          <View style={styles.goalContainer}>
-            <Text style={styles.sectionTitle}>Seuraava tavoite</Text>
-            
-            <View style={styles.nextGoalCard}>
-              <View style={styles.goalHeader}>
-                <Text style={styles.goalIcon}>{nextAchievement.icon}</Text>
-                <View style={styles.goalInfo}>
-                  <Text style={styles.goalName}>{nextAchievement.name}</Text>
-                  <Text style={styles.goalDescription}>{nextAchievement.description}</Text>
-                </View>
-              </View>
-              
-              <View style={styles.progressContainer}>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${progressData.progress}%` }]} />
-                </View>
-                <Text style={styles.progressText}>
-                  {progressData.current} / {progressData.target}
+        {/* Saavutukset-linkki */}
+        <View style={styles.settingsContainer}>
+          <TouchableOpacity
+            style={styles.achievementsButton}
+            onPress={() => navigation.navigate('Achievements')}
+          >
+            <View style={styles.achievementsButtonContent}>
+              <Text style={styles.achievementsButtonIcon}>🏆</Text>
+              <View style={styles.achievementsButtonTextContainer}>
+                <Text style={styles.achievementsButtonTitle}>Saavutukset</Text>
+                <Text style={styles.achievementsButtonSubtitle}>
+                  Katso kaikki saavutuksesi
                 </Text>
               </View>
-              
-              <Text style={styles.motivationalText}>{getMotivationalMessage()}</Text>
             </View>
-          </View>
-        )}
+            <Text style={styles.achievementsButtonArrow}>›</Text>
+          </TouchableOpacity>
+        </View>
 
-        {/* Saavutukset */}
-        <View style={styles.achievementsContainer}>
-          <Text style={styles.sectionTitle}>
-            Saavutukset ({unlockedAchievements.length}/{achievements.length})
-          </Text>
+        {/* Asetukset */}
+        <View style={styles.settingsContainer}>
+          <Text style={styles.sectionTitle}>Asetukset</Text>
           
-          <View style={styles.achievementsGrid}>
-            {achievements.map((achievement) => {
-              const isUnlocked = unlockedAchievements.some(a => a.id === achievement.id);
-              return (
-                <View 
-                  key={achievement.id} 
-                  style={[
-                    styles.achievementCard,
-                    !isUnlocked && styles.achievementLocked
-                  ]}
-                >
-                  <Text style={[
-                    styles.achievementIcon,
-                    !isUnlocked && styles.achievementIconLocked
-                  ]}>
-                    {achievement.icon}
+          <View style={styles.settingCard}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingIcon}>🔔</Text>
+                <View>
+                  <Text style={styles.settingTitle}>Päivittäiset muistutukset</Text>
+                  <Text style={styles.settingDescription}>
+                    {notificationSettings.enabled
+                      ? `Klo ${notificationSettings.dailyReminderTime}`
+                      : 'Ei käytössä'}
                   </Text>
-                  <Text style={[
-                    styles.achievementName,
-                    !isUnlocked && styles.achievementNameLocked
-                  ]}>
-                    {achievement.name}
-                  </Text>
-                  {isUnlocked && (
-                    <View style={styles.unlockedBadge}>
-                      <Text style={styles.unlockedBadgeText}>✓</Text>
-                    </View>
-                  )}
                 </View>
-              );
-            })}
+              </View>
+              <Switch
+                value={notificationSettings.enabled}
+                onValueChange={toggleNotifications}
+                trackColor={{ false: colors.borderLight, true: colors.primary }}
+                thumbColor={colors.white}
+              />
+            </View>
           </View>
         </View>
 
@@ -628,123 +576,74 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
-  goalContainer: {
+  settingsContainer: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.xl,
   },
-  nextGoalCard: {
+  settingCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    ...shadows.sm,
+  },
+  settingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingIcon: {
+    fontSize: 24,
+    marginRight: spacing.md,
+  },
+  settingTitle: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+    marginBottom: 2,
+  },
+  settingDescription: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+  },
+  achievementsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: colors.white,
     padding: spacing.lg,
     borderRadius: borderRadius.lg,
-    ...shadows.md,
-  },
-  goalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  goalIcon: {
-    fontSize: 40,
-    marginRight: spacing.md,
-  },
-  goalInfo: {
-    flex: 1,
-  },
-  goalName: {
-    fontSize: typography.fontSizes.lg,
-    fontWeight: typography.fontWeights.bold,
-    color: colors.text,
-    marginBottom: spacing.xs,
-  },
-  goalDescription: {
-    fontSize: typography.fontSizes.sm,
-    color: colors.textSecondary,
-  },
-  progressContainer: {
-    marginBottom: spacing.md,
-  },
-  progressBar: {
-    height: 12,
-    backgroundColor: colors.gray100,
-    borderRadius: borderRadius.full,
-    overflow: 'hidden',
-    marginBottom: spacing.xs,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.full,
-  },
-  progressText: {
-    fontSize: typography.fontSizes.sm,
-    color: colors.textSecondary,
-    textAlign: 'right',
-    fontWeight: typography.fontWeights.medium,
-  },
-  motivationalText: {
-    fontSize: typography.fontSizes.md,
-    color: colors.primary,
-    textAlign: 'center',
-    fontWeight: typography.fontWeights.medium,
-    fontStyle: 'italic',
-  },
-  achievementsContainer: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.xl,
-  },
-  achievementsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-  },
-  achievementCard: {
-    width: '30%',
-    aspectRatio: 1,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
     ...shadows.sm,
   },
-  achievementLocked: {
-    opacity: 0.4,
-    backgroundColor: colors.gray50,
+  achievementsButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
-  achievementIcon: {
+  achievementsButtonIcon: {
     fontSize: 32,
-    marginBottom: spacing.xs,
+    marginRight: spacing.md,
   },
-  achievementIconLocked: {
-    opacity: 0.5,
+  achievementsButtonTextContainer: {
+    flex: 1,
   },
-  achievementName: {
-    fontSize: typography.fontSizes.xs,
+  achievementsButtonTitle: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
     color: colors.text,
-    textAlign: 'center',
-    fontWeight: typography.fontWeights.medium,
+    marginBottom: 2,
   },
-  achievementNameLocked: {
+  achievementsButtonSubtitle: {
+    fontSize: typography.fontSizes.sm,
     color: colors.textSecondary,
   },
-  unlockedBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    width: 24,
-    height: 24,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.success,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
-  unlockedBadgeText: {
-    color: colors.white,
-    fontSize: 12,
-    fontWeight: typography.fontWeights.bold,
+  achievementsButtonArrow: {
+    fontSize: 28,
+    color: colors.textSecondary,
   },
   actionsContainer: {
     marginHorizontal: spacing.lg,

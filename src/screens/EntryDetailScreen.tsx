@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,53 +8,70 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
+  Dimensions,
   Modal,
+  Pressable,
+  Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+import ViewShot from 'react-native-view-shot';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { updateEntry, deleteEntry, uploadImages } from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
-import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
+import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
 
-type LayoutType = 'grid' | 'masonry' | 'magazine';
-type TextPosition = 'top' | 'middle' | 'bottom';
-type ImageShape = 'square' | 'circle' | 'landscape';
+const { width } = Dimensions.get('window');
+
+type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
 
 interface Props {
   navigation: any;
   route: {
     params: {
-      entry: DiaryEntry;
-      onUpdate?: () => void;
+      entry: any; // Serialized entry with date strings
     };
   };
 }
 
 export default function EntryDetailScreen({ navigation, route }: Props) {
-  const { entry: initialEntry, onUpdate } = route.params;
-  const [entry, setEntry] = useState<DiaryEntry>(initialEntry);
+  const { entry: serializedEntry } = route.params;
+  const { user } = useAuth();
+  
+  // Konvertoi Date-stringit takaisin Date-objekteiksi
+  const normalizedEntry: DiaryEntry = {
+    ...serializedEntry,
+    date: new Date(serializedEntry.date),
+    createdAt: new Date(serializedEntry.createdAt),
+    updatedAt: new Date(serializedEntry.updatedAt),
+  };
+
+  const [entry, setEntry] = useState<DiaryEntry>(normalizedEntry);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState(entry.title);
   const [editedContent, setEditedContent] = useState(entry.content);
   const [editedImages, setEditedImages] = useState<string[]>(entry.images);
-  const [layout, setLayout] = useState<LayoutType>(entry.layout || 'grid');
-  const [textPosition, setTextPosition] = useState<TextPosition>(entry.textPosition || 'top');
-  const [imageShape, setImageShape] = useState<ImageShape>(entry.imageShape || 'square');
-  const [textOverlay, setTextOverlay] = useState(entry.textOverlay || false);
+  const [editedDate, setEditedDate] = useState(entry.date);
+  const [editedLocation, setEditedLocation] = useState(entry.location || null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [loadingLocation, setLoadingLocation] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [layoutModalVisible, setLayoutModalVisible] = useState(false);
-  const [tempLayout, setTempLayout] = useState<LayoutType>('grid');
-  const [tempTextPosition, setTempTextPosition] = useState<TextPosition>('top');
-  const [tempImageShape, setTempImageShape] = useState<ImageShape>('square');
-  const [tempTextOverlay, setTempTextOverlay] = useState(false);
-  const { user } = useAuth();
+  const [layout, setLayout] = useState<LayoutType>(entry.layout || 'grid');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [showLayoutSelector, setShowLayoutSelector] = useState(false);
+  const [tempLayout, setTempLayout] = useState<LayoutType>(entry.layout || 'grid');
+  const viewShotRef = useRef<ViewShot>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
 
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleDateString('fi-FI', {
       weekday: 'long',
-      day: 'numeric',
-      month: 'long',
       year: 'numeric',
+      month: 'long',
+      day: 'numeric',
     });
   };
 
@@ -63,6 +80,38 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const getLocation = async () => {
+    setLoadingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Lupa tarvitaan', 'Sijainnin käyttöoikeus tarvitaan paikan lisäämiseen.');
+        return;
+      }
+
+      const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = currentLocation.coords;
+
+      try {
+        const [addressData] = await Location.reverseGeocodeAsync({ latitude, longitude });
+        const address = addressData
+          ? `${addressData.city || ''}, ${addressData.country || ''}`.trim().replace(/^,\s*/, '')
+          : undefined;
+        
+        setEditedLocation({ latitude, longitude, address });
+        Alert.alert('Sijainti lisätty', address || 'Sijainti tallennettu');
+      } catch {
+        setEditedLocation({ latitude, longitude });
+        Alert.alert('Sijainti lisätty', 'Sijainti tallennettu');
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert('Virhe', 'Sijainnin hakeminen epäonnistui');
+    } finally {
+      setLoadingLocation(false);
+    }
   };
 
   const handleSave = async () => {
@@ -77,18 +126,22 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         title: editedTitle.trim(),
         content: editedContent.trim(),
         images: editedImages,
+        layout: layout,
+        date: editedDate,
+        ...(editedLocation && { location: editedLocation }),
       });
 
-      const updatedEntry = {
+      setEntry({
         ...entry,
         title: editedTitle.trim(),
         content: editedContent.trim(),
         images: editedImages,
-      };
-
-      setEntry(updatedEntry);
+        layout: layout,
+        date: editedDate,
+        location: editedLocation || undefined,
+      });
+      
       setIsEditing(false);
-      onUpdate?.();
       Alert.alert('Tallennettu', 'Muutokset on tallennettu');
     } catch (error) {
       console.error('Error saving entry:', error);
@@ -98,41 +151,19 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     }
   };
 
-  const saveLayoutSettings = async () => {
-    try {
-      await updateEntry(entry.id, {
-        layout,
-        textPosition,
-        imageShape,
-        textOverlay,
-      });
-      
-      const updatedEntry = {
-        ...entry,
-        layout,
-        textPosition,
-        imageShape,
-        textOverlay,
-      };
-      
-      setEntry(updatedEntry);
-      onUpdate?.();
-    } catch (error) {
-      console.error('Error saving layout settings:', error);
-    }
-  };
-
   const handleCancel = () => {
     setEditedTitle(entry.title);
     setEditedContent(entry.content);
     setEditedImages(entry.images);
+    setEditedDate(entry.date);
+    setEditedLocation(entry.location || null);
     setIsEditing(false);
   };
 
   const handleDelete = () => {
     Alert.alert(
       'Poista merkintä',
-      'Haluatko varmasti poistaa tämän merkinnän? Tätä toimintoa ei voi perua.',
+      'Haluatko varmasti poistaa tämän merkinnän?',
       [
         { text: 'Peruuta', style: 'cancel' },
         {
@@ -141,9 +172,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           onPress: async () => {
             try {
               await deleteEntry(entry.id);
-              onUpdate?.();
-              navigation.goBack();
-              Alert.alert('Poistettu', 'Merkintä on poistettu');
+              Alert.alert('Poistettu', 'Merkintä poistettu', [
+                { text: 'OK', onPress: () => navigation.goBack() }
+              ]);
             } catch (error) {
               Alert.alert('Virhe', 'Poistaminen epäonnistui');
             }
@@ -153,186 +184,359 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     );
   };
 
-  const addImage = async () => {
+  const handleShare = async () => {
+    try {
+      if (!viewShotRef.current) {
+        Alert.alert('Virhe', 'Kuvakaappauksen ottaminen epäonnistui');
+        return;
+      }
+
+      if (!viewShotRef.current?.capture) {
+        Alert.alert('Virhe', 'Kuvakaappauksen ottaminen epäonnistui');
+        return;
+      }
+
+      // Vieritä sisältö alkuun ennen kuvakaappauksen ottamista
+      if (scrollViewRef.current) {
+        scrollViewRef.current.scrollTo({ y: 0, animated: false });
+        // Odota pidempi aika että scroll ja renderöinti valmistuu
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      const uri = await viewShotRef.current.capture();
+      const isAvailable = await Sharing.isAvailableAsync();
+      
+      if (isAvailable) {
+        const result = await Sharing.shareAsync(uri, {
+          mimeType: 'image/jpeg',
+        });
+        
+        // Merkitse merkintä jaetuksi (shareAsync palauttaa aina, vaikka käyttäjä peruisi)
+        if (user && !entry.shared) {
+          console.log('Marking entry as shared:', entry.id);
+          await updateEntry(entry.id, { shared: true });
+          const updatedEntry = { ...entry, shared: true };
+          setEntry(updatedEntry);
+          console.log('Entry marked as shared successfully');
+        }
+      } else {
+        Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
+      }
+    } catch (error) {
+      console.error('Jakaminen epäonnistui:', error);
+      Alert.alert('Virhe', 'Merkinnän jakaminen epäonnistui');
+    }
+  };
+
+  const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets && user) {
+      setSaving(true);
       try {
         const newImageUris = result.assets.map((asset) => asset.uri);
         const uploadedUrls = await uploadImages(newImageUris, user.uid);
         setEditedImages([...editedImages, ...uploadedUrls]);
       } catch (error) {
         Alert.alert('Virhe', 'Kuvien lataus epäonnistui');
+      } finally {
+        setSaving(false);
       }
     }
   };
 
-  const removeImage = (index: number) => {
-    Alert.alert(
-      'Poista kuva',
-      'Haluatko varmasti poistaa tämän kuvan?',
-      [
-        { text: 'Peruuta', style: 'cancel' },
-        {
-          text: 'Poista',
-          style: 'destructive',
-          onPress: () => {
-            const newImages = editedImages.filter((_, i) => i !== index);
-            setEditedImages(newImages);
-          },
-        },
-      ]
-    );
+  const removeImage = (uri: string) => {
+    setEditedImages(editedImages.filter((img) => img !== uri));
+  };
+  const handleImagePress = (uri: string) => {
+    if (!isEditing) {
+      setSelectedImage(uri);
+    }
   };
 
-  const renderImages = () => {
-    const imagesToShow = isEditing ? editedImages : entry.images;
+  const handleShareImage = async () => {
+    if (!selectedImage) return;
     
-    console.log('Current layout:', layout);
-    console.log('Text position:', textPosition);
-    console.log('Image shape:', imageShape);
-    console.log('Text overlay:', textOverlay);
+    try {
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
+        return;
+      }
 
-    if (imagesToShow.length === 0) {
-      return isEditing ? (
-        <TouchableOpacity style={styles.addImageButton} onPress={addImage}>
-          <Text style={styles.addImageIcon}>📷</Text>
-          <Text style={styles.addImageText}>Lisää kuvia</Text>
-        </TouchableOpacity>
-      ) : null;
+      // Lataa kuva paikallisesti ensin
+      const timestamp = Date.now();
+      const localUri = `${FileSystem.cacheDirectory}shared_image_${timestamp}.jpg`;
+      
+      const downloadResult = await FileSystem.downloadAsync(selectedImage, localUri);
+      
+      if (downloadResult.uri) {
+        const result = await Sharing.shareAsync(downloadResult.uri, {
+          mimeType: 'image/jpeg',
+        });
+        
+        // Merkitse merkintä jaetuksi
+        if (user && !entry.shared) {
+          console.log('Marking entry as shared (image):', entry.id);
+          await updateEntry(entry.id, { shared: true });
+          const updatedEntry = { ...entry, shared: true };
+          setEntry(updatedEntry);
+          console.log('Entry marked as shared successfully (image)');
+        }
+      } else {
+        Alert.alert('Virhe', 'Kuvan lataaminen epäonnistui');
+      }
+    } catch (error) {
+      console.error('Jakaminen epäonnistui:', error);
+      Alert.alert('Virhe', 'Jakaminen epäonnistui');
     }
+  };
+  const renderImages = () => {
+    const images = isEditing ? editedImages : entry.images;
+    if (images.length === 0) return null;
 
-    if (layout === 'grid') {
-      return (
-        <View style={styles.gridLayout}>
-          {imagesToShow.map((uri, index) => (
-            <View key={index} style={[
-              styles.gridImageWrapper,
-              imageShape === 'circle' && styles.circleImage,
-              imageShape === 'landscape' && styles.landscapeImage,
-            ]}>
-              <Image source={{ uri }} style={styles.gridImage} />
-              {isEditing && (
-                <TouchableOpacity
-                  style={styles.removeImageButton}
-                  onPress={() => removeImage(index)}
-                >
-                  <Text style={styles.removeImageText}>×</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
-          {isEditing && (
-            <TouchableOpacity style={styles.gridAddButton} onPress={addImage}>
-              <Text style={styles.gridAddIcon}>+</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
-
-    if (layout === 'masonry') {
-      return (
-        <View style={styles.masonryLayout}>
-          <View style={styles.masonryColumn}>
-            {imagesToShow.filter((_, i) => i % 2 === 0).map((uri, index) => {
-              const actualIndex = index * 2;
-              return (
-                <View key={actualIndex} style={[
-                  styles.masonryImageWrapper,
-                  imageShape === 'circle' && styles.circleImage,
-                  imageShape === 'landscape' && styles.landscapeImage,
-                ]}>
-                  <Image
-                    source={{ uri }}
-                    style={[styles.masonryImage, { height: 150 + (actualIndex % 3) * 50 }]}
-                  />
-                  {isEditing && (
-                    <TouchableOpacity
-                      style={styles.removeImageButton}
-                      onPress={() => removeImage(actualIndex)}
-                    >
-                      <Text style={styles.removeImageText}>×</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            })}
+    switch (layout) {
+      case 'grid':
+        return (
+          <View style={styles.gridContainer}>
+            {images.map((uri, index) => (
+              <TouchableOpacity 
+                key={index} 
+                style={styles.gridImageWrapper}
+                onPress={() => handleImagePress(uri)}
+                activeOpacity={0.9}
+              >
+                <Image source={{ uri }} style={styles.gridImage} resizeMode="cover" />
+                {isEditing && (
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(uri)}
+                  >
+                    <Text style={styles.removeImageText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            ))}
           </View>
-          <View style={styles.masonryColumn}>
-            {imagesToShow.filter((_, i) => i % 2 === 1).map((uri, index) => {
-              const actualIndex = index * 2 + 1;
-              return (
-                <View key={actualIndex} style={[
-                  styles.masonryImageWrapper,
-                  imageShape === 'circle' && styles.circleImage,
-                  imageShape === 'landscape' && styles.landscapeImage,
-                ]}>
-                  <Image
-                    source={{ uri }}
-                    style={[styles.masonryImage, { height: 180 + (actualIndex % 3) * 40 }]}
-                  />
-                  {isEditing && (
-                    <TouchableOpacity
-                      style={styles.removeImageButton}
-                      onPress={() => removeImage(actualIndex)}
-                    >
-                      <Text style={styles.removeImageText}>×</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-          {isEditing && (
-            <TouchableOpacity style={styles.masonryAddButton} onPress={addImage}>
-              <Text style={styles.gridAddIcon}>+</Text>
-              <Text style={styles.addImageText}>Lisää</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
+        );
 
-    if (layout === 'magazine') {
-      return (
-        <View style={styles.magazineLayout}>
-          {imagesToShow.map((uri, index) => (
-            <View
-              key={index}
-              style={[
-                styles.magazineImageWrapper,
-                index === 0 && styles.magazineHero,
-                index > 0 && styles.magazineSmall,
-                imageShape === 'circle' && styles.circleImage,
-                imageShape === 'landscape' && styles.landscapeImage,
-              ]}
-            >
-              <Image source={{ uri }} style={styles.magazineImage} />
-              {isEditing && (
-                <TouchableOpacity
-                  style={styles.removeImageButton}
-                  onPress={() => removeImage(index)}
-                >
-                  <Text style={styles.removeImageText}>×</Text>
-                </TouchableOpacity>
-              )}
+      case 'masonry':
+        // Vaihtelevat korkeudet masonry-layoutille
+        const heights = [180, 240, 200, 260, 190, 220, 210, 250];
+        return (
+          <View style={styles.masonryContainer}>
+            <View style={styles.masonryColumn}>
+              {images.filter((_, i) => i % 2 === 0).map((uri, index) => {
+                const actualIndex = index * 2;
+                const height = heights[actualIndex % heights.length];
+                return (
+                  <TouchableOpacity 
+                    key={actualIndex} 
+                    style={[styles.masonryImageWrapper, { height }]}
+                    onPress={() => handleImagePress(uri)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri }} style={styles.masonryImage} resizeMode="cover" />
+                    {isEditing && (
+                      <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => removeImage(uri)}
+                      >
+                        <Text style={styles.removeImageText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          ))}
-          {isEditing && (
-            <TouchableOpacity style={styles.magazineAddButton} onPress={addImage}>
-              <Text style={styles.gridAddIcon}>+</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
+            <View style={styles.masonryColumn}>
+              {images.filter((_, i) => i % 2 === 1).map((uri, index) => {
+                const actualIndex = index * 2 + 1;
+                const height = heights[actualIndex % heights.length];
+                return (
+                  <TouchableOpacity 
+                    key={actualIndex} 
+                    style={[styles.masonryImageWrapper, { height }]}
+                    onPress={() => handleImagePress(uri)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri }} style={styles.masonryImage} resizeMode="cover" />
+                    {isEditing && (
+                      <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => removeImage(uri)}
+                      >
+                        <Text style={styles.removeImageText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        );
 
-    return null;
+      case 'magazine':
+        return (
+          <View style={styles.magazineContainer}>
+            {images[0] && (
+              <TouchableOpacity 
+                style={styles.magazineLargeWrapper}
+                onPress={() => handleImagePress(images[0])}
+                activeOpacity={0.9}
+              >
+                <Image source={{ uri: images[0] }} style={styles.magazineLarge} resizeMode="cover" />
+                {isEditing && (
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(images[0])}
+                  >
+                    <Text style={styles.removeImageText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            )}
+            {images.length > 1 && (
+              <View style={styles.magazineSmallRow}>
+                {images.slice(1).map((uri, index) => (
+                  <TouchableOpacity 
+                    key={index + 1} 
+                    style={styles.magazineSmallWrapper}
+                    onPress={() => handleImagePress(uri)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri }} style={styles.magazineSmall} resizeMode="cover" />
+                    {isEditing && (
+                      <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => removeImage(uri)}
+                      >
+                        <Text style={styles.removeImageText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+
+      case 'full':
+        return (
+          <View style={styles.fullContainer}>
+            {images.map((uri, index) => (
+              <TouchableOpacity 
+                key={index} 
+                style={styles.fullImageWrapper}
+                onPress={() => handleImagePress(uri)}
+                activeOpacity={0.9}
+              >
+                <Image source={{ uri }} style={styles.fullImage} resizeMode="cover" />
+                {isEditing && (
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(uri)}
+                  >
+                    <Text style={styles.removeImageText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        );
+
+      case 'framed':
+        return (
+          <View style={styles.framedContainer}>
+            {images.map((uri, index) => (
+              <TouchableOpacity 
+                key={index} 
+                style={styles.framedImageWrapper}
+                onPress={() => handleImagePress(uri)}
+                activeOpacity={0.9}
+              >
+                <View style={styles.woodFrame}>
+                  <Image source={{ uri }} style={styles.framedImage} resizeMode="cover" />
+                </View>
+                {isEditing && (
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(uri)}
+                  >
+                    <Text style={styles.removeImageText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        );
+
+      case 'overlay':
+        return (
+          <View style={styles.overlayContainer}>
+            {images[0] && (
+              <TouchableOpacity 
+                style={styles.overlayImageWrapper}
+                onPress={() => handleImagePress(images[0])}
+                activeOpacity={0.9}
+                disabled={isEditing}
+              >
+                <Image source={{ uri: images[0] }} style={styles.overlayBackgroundImage} resizeMode="cover" />
+                <View style={styles.overlayGradient} />
+                
+                {/* Näytä overlay-teksti vain kun EI muokata */}
+                {!isEditing && (
+                  <View style={styles.overlayTextContainer}>
+                    <Text style={styles.overlayTitle}>{editedTitle || entry.title}</Text>
+                    <Text style={styles.overlayContent} numberOfLines={6}>
+                      {editedContent || entry.content}
+                    </Text>
+                  </View>
+                )}
+
+                {isEditing && (
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(images[0])}
+                  >
+                    <Text style={styles.removeImageText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            )}
+            
+            {images.length > 1 && (
+              <View style={styles.overlayThumbnailRow}>
+                {images.slice(1, 4).map((uri, index) => (
+                  <TouchableOpacity 
+                    key={index + 1}
+                    style={styles.overlayThumbnail}
+                    onPress={() => handleImagePress(uri)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri }} style={styles.overlayThumbnailImage} resizeMode="cover" />
+                    {isEditing && (
+                      <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => removeImage(uri)}
+                      >
+                        <Text style={styles.removeImageText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+
+      default:
+        return null;
+    }
   };
 
   return (
@@ -346,28 +550,22 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         <View style={styles.headerButtons}>
           {!isEditing ? (
             <>
-              <TouchableOpacity
-                style={styles.iconButton}
+              <TouchableOpacity style={styles.iconButton} onPress={handleShare}>
+                <Text style={styles.iconButtonText}>📤</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.iconButton} 
                 onPress={() => {
                   setTempLayout(layout);
-                  setTempTextPosition(textPosition);
-                  setTempImageShape(imageShape);
-                  setTempTextOverlay(textOverlay);
-                  setLayoutModalVisible(true);
+                  setShowLayoutSelector(true);
                 }}
               >
                 <Text style={styles.iconButtonText}>🎨</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={() => setIsEditing(true)}
-              >
+              <TouchableOpacity style={styles.iconButton} onPress={() => setIsEditing(true)}>
                 <Text style={styles.iconButtonText}>✏️</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={handleDelete}
-              >
+              <TouchableOpacity style={styles.iconButton} onPress={handleDelete}>
                 <Text style={styles.iconButtonText}>🗑️</Text>
               </TouchableOpacity>
             </>
@@ -394,228 +592,115 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         </View>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent}>
-        {/* Text Overlay Mode */}
-        {textOverlay && (
-          <View style={styles.overlayContainer}>
-            {/* Images as background */}
-            {entry.images.length > 0 && (
-              <Image 
-                source={{ uri: entry.images[0] }} 
-                style={styles.overlayBackgroundImage}
-                blurRadius={2}
-              />
-            )}
-            
-            {/* Dark gradient overlay */}
-            <View style={styles.overlayGradient} />
-            
-            {/* Text content on top */}
-            <View style={styles.overlayTextContainer}>
-              <View style={styles.dateHeader}>
-                <View style={styles.dateBox}>
-                  <Text style={[styles.dayNumber, { color: colors.white }]}>{new Date(entry.date).getDate()}</Text>
-                  <Text style={[styles.monthYear, { color: colors.white }]}>
-                    {new Date(entry.date).toLocaleDateString('fi-FI', { month: 'short', year: 'numeric' })}
-                  </Text>
-                </View>
-                <View style={styles.dateInfo}>
-                  <Text style={[styles.dateText, { color: colors.white }]}>{formatDate(entry.date)}</Text>
-                  <Text style={[styles.timeText, { color: colors.white }]}>{formatTime(entry.date)}</Text>
-                </View>
-              </View>
+      {/* Content */}
+      <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.9 }} style={{ flex: 1 }}>
+        <ScrollView 
+          style={styles.scrollContent} 
+          contentContainerStyle={styles.contentContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Date */}
+          <TouchableOpacity 
+            style={styles.dateSection}
+            onPress={() => isEditing && setShowDatePicker(true)}
+            disabled={!isEditing}
+          >
+            <Text style={styles.dateText}>{formatDate(isEditing ? editedDate : entry.date)}</Text>
+            <Text style={styles.timeText}>
+              {isEditing ? 'Napauta vaihtaaksesi päivää 📅' : formatTime(entry.date)}
+            </Text>
+          </TouchableOpacity>
 
-              {isEditing ? (
-                <TextInput
-                  style={[styles.titleInput, { backgroundColor: 'rgba(255,255,255,0.9)' }]}
-                  value={editedTitle}
-                  onChangeText={setEditedTitle}
-                  placeholder="Otsikko"
-                  placeholderTextColor={colors.textLight}
-                />
-              ) : (
-                <Text style={[styles.title, { color: colors.white }]}>{entry.title}</Text>
-              )}
+          {showDatePicker && (
+            <DateTimePicker
+              value={editedDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, date) => {
+                setShowDatePicker(Platform.OS === 'ios');
+                if (date) {
+                  setEditedDate(date);
+                }
+              }}
+              maximumDate={new Date()}
+            />
+          )}
 
-              {isEditing ? (
-                <TextInput
-                  style={[styles.contentInput, { backgroundColor: 'rgba(255,255,255,0.9)' }]}
-                  value={editedContent}
-                  onChangeText={setEditedContent}
-                  placeholder="Sisältö"
-                  placeholderTextColor={colors.textLight}
-                  multiline
-                  textAlignVertical="top"
-                />
-              ) : (
-                <Text style={[styles.contentText, { color: colors.white }]}>{entry.content}</Text>
-              )}
-            </View>
-            
-            {/* Additional images below */}
-            {entry.images.length > 1 && (
-              <View style={styles.overlayAdditionalImages}>
-                {renderImages()}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Normal Mode - Content Order based on textPosition */}
-        {!textOverlay && textPosition === 'top' && (
-          <>
-            {/* Date Header */}
-            <View style={styles.dateHeader}>
-              <View style={styles.dateBox}>
-                <Text style={styles.dayNumber}>{new Date(entry.date).getDate()}</Text>
-                <Text style={styles.monthYear}>
-                  {new Date(entry.date).toLocaleDateString('fi-FI', { month: 'short', year: 'numeric' })}
-                </Text>
-              </View>
-              <View style={styles.dateInfo}>
-                <Text style={styles.dateText}>{formatDate(entry.date)}</Text>
-                <Text style={styles.timeText}>{formatTime(entry.date)}</Text>
-              </View>
-            </View>
-
-            {/* Title */}
-            {isEditing ? (
+          {/* Title - näytä myös overlay-moodissa muokkaus-tilassa */}
+          {(layout !== 'overlay' || isEditing) && (
+            isEditing ? (
               <TextInput
                 style={styles.titleInput}
                 value={editedTitle}
                 onChangeText={setEditedTitle}
                 placeholder="Otsikko"
-                placeholderTextColor={colors.textLight}
+                multiline
               />
             ) : (
               <Text style={styles.title}>{entry.title}</Text>
-            )}
+            )
+          )}
 
-            {/* Content */}
-            {isEditing ? (
+          {/* Content - näytä myös overlay-moodissa muokkaus-tilassa */}
+          {(layout !== 'overlay' || isEditing) && (
+            isEditing ? (
               <TextInput
                 style={styles.contentInput}
                 value={editedContent}
                 onChangeText={setEditedContent}
                 placeholder="Sisältö"
-                placeholderTextColor={colors.textLight}
                 multiline
                 textAlignVertical="top"
               />
             ) : (
-              <Text style={styles.contentText}>{entry.content}</Text>
-            )}
+              <Text style={styles.content}>{entry.content}</Text>
+            )
+          )}
 
-            {/* Images */}
-            {renderImages()}
-          </>
-        )}
-
-        {!textOverlay && textPosition === 'middle' && (
-          <>
-            {/* Date Header */}
-            <View style={styles.dateHeader}>
-              <View style={styles.dateBox}>
-                <Text style={styles.dayNumber}>{new Date(entry.date).getDate()}</Text>
-                <Text style={styles.monthYear}>
-                  {new Date(entry.date).toLocaleDateString('fi-FI', { month: 'short', year: 'numeric' })}
+          {/* Location */}
+          {isEditing ? (
+            editedLocation ? (
+              <View style={styles.locationSection}>
+                <Text style={styles.locationIcon}>📍</Text>
+                <Text style={styles.locationText}>
+                  {editedLocation.address || `${editedLocation.latitude.toFixed(4)}, ${editedLocation.longitude.toFixed(4)}`}
+                </Text>
+                <TouchableOpacity onPress={() => setEditedLocation(null)}>
+                  <Text style={styles.removeLocationText}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity 
+                style={styles.addLocationButton}
+                onPress={getLocation}
+                disabled={loadingLocation}
+              >
+                <Text style={styles.addLocationIcon}>📍</Text>
+                <Text style={styles.addLocationText}>
+                  {loadingLocation ? 'Haetaan sijaintia...' : 'Lisää sijainti'}
+                </Text>
+              </TouchableOpacity>
+            )
+          ) : (
+            entry.location && (
+              <View style={styles.locationSection}>
+                <Text style={styles.locationIcon}>📍</Text>
+                <Text style={styles.locationText}>
+                  {entry.location.address || `${entry.location.latitude.toFixed(4)}, ${entry.location.longitude.toFixed(4)}`}
                 </Text>
               </View>
-              <View style={styles.dateInfo}>
-                <Text style={styles.dateText}>{formatDate(entry.date)}</Text>
-                <Text style={styles.timeText}>{formatTime(entry.date)}</Text>
-              </View>
-            </View>
+            )
+          )}
 
-            {/* Title */}
-            {isEditing ? (
-              <TextInput
-                style={styles.titleInput}
-                value={editedTitle}
-                onChangeText={setEditedTitle}
-                placeholder="Otsikko"
-                placeholderTextColor={colors.textLight}
-              />
-            ) : (
-              <Text style={styles.title}>{entry.title}</Text>
-            )}
+          {/* Images */}
+          {renderImages()}
 
-            {/* Images */}
-            {renderImages()}
-
-            {/* Content */}
-            {isEditing ? (
-              <TextInput
-                style={styles.contentInput}
-                value={editedContent}
-                onChangeText={setEditedContent}
-                placeholder="Sisältö"
-                placeholderTextColor={colors.textLight}
-                multiline
-                textAlignVertical="top"
-              />
-            ) : (
-              <Text style={styles.contentText}>{entry.content}</Text>
-            )}
-          </>
-        )}
-
-        {!textOverlay && textPosition === 'bottom' && (
-          <>
-            {/* Date Header */}
-            <View style={styles.dateHeader}>
-              <View style={styles.dateBox}>
-                <Text style={styles.dayNumber}>{new Date(entry.date).getDate()}</Text>
-                <Text style={styles.monthYear}>
-                  {new Date(entry.date).toLocaleDateString('fi-FI', { month: 'short', year: 'numeric' })}
-                </Text>
-              </View>
-              <View style={styles.dateInfo}>
-                <Text style={styles.dateText}>{formatDate(entry.date)}</Text>
-                <Text style={styles.timeText}>{formatTime(entry.date)}</Text>
-              </View>
-            </View>
-
-            {/* Images */}
-            {renderImages()}
-
-            {/* Title */}
-            {isEditing ? (
-              <TextInput
-                style={styles.titleInput}
-                value={editedTitle}
-                onChangeText={setEditedTitle}
-                placeholder="Otsikko"
-                placeholderTextColor={colors.textLight}
-              />
-            ) : (
-              <Text style={styles.title}>{entry.title}</Text>
-            )}
-
-            {/* Content */}
-            {isEditing ? (
-              <TextInput
-                style={styles.contentInput}
-                value={editedContent}
-                onChangeText={setEditedContent}
-                placeholder="Sisältö"
-                placeholderTextColor={colors.textLight}
-                multiline
-                textAlignVertical="top"
-              />
-            ) : (
-              <Text style={styles.contentText}>{entry.content}</Text>
-            )}
-          </>
-        )}
-
-        {/* Location */}
-        {entry.location && (
-          <View style={styles.locationSection}>
-            <Text style={styles.locationIcon}>📍</Text>
-            <Text style={styles.locationText}>{entry.location.address}</Text>
-          </View>
-        )}
+          {/* Add Image Button */}
+          {isEditing && (
+            <TouchableOpacity style={styles.addImageButton} onPress={pickImage}>
+              <Text style={styles.addImageText}>+ Lisää kuvia</Text>
+            </TouchableOpacity>
+          )}
 
         {/* Metadata */}
         <View style={styles.metadata}>
@@ -627,152 +712,140 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           </Text>
         </View>
       </ScrollView>
+      </ViewShot>
 
-      {/* Layout Selection Modal */}
+      {/* Image Modal */}
       <Modal
-        visible={layoutModalVisible}
-        transparent
+        visible={selectedImage !== null}
+        transparent={true}
         animationType="fade"
-        onRequestClose={() => setLayoutModalVisible(false)}
+        onRequestClose={() => setSelectedImage(null)}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setLayoutModalVisible(false)}
-        >
-          <View style={styles.modalContent}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>Asettelun muokkaus</Text>
+        <View style={styles.modalContainer}>
+          <Pressable 
+            style={styles.modalBackdrop}
+            onPress={() => setSelectedImage(null)}
+          />
+          
+          {selectedImage && (
+            <>
+              <Image 
+                source={{ uri: selectedImage }} 
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+              
+              {/* Floating toolbar */}
+              <View style={styles.modalToolbar}>
+                <TouchableOpacity 
+                  style={styles.toolbarButton}
+                  onPress={handleShareImage}
+                >
+                  <Text style={styles.toolbarButtonText}>📤 Jaa</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={[styles.toolbarButton, styles.closeButton]}
+                  onPress={() => setSelectedImage(null)}
+                >
+                  <Text style={styles.toolbarButtonText}>✕ Sulje</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
+      </Modal>
+
+      {/* Layout Selector Modal */}
+      <Modal
+        visible={showLayoutSelector}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowLayoutSelector(false)}
+      >
+        <View style={styles.layoutModalContainer}>
+          <View style={styles.layoutModalContent}>
+            <Text style={styles.layoutModalTitle}>Valitse asettelu</Text>
             
-            {/* Layout Type */}
-            <Text style={styles.sectionTitle}>Kuvien asettelu</Text>
-            <View style={styles.optionsRow}>
+            <View style={styles.layoutOptionsContainer}>
               <TouchableOpacity
-                style={[styles.layoutOption, tempLayout === 'grid' && styles.layoutOptionActive]}
+                style={[styles.layoutOption, tempLayout === 'grid' && styles.layoutOptionSelected]}
                 onPress={() => setTempLayout('grid')}
               >
-                <Text style={styles.layoutIcon}>⊞</Text>
-                <Text style={styles.layoutName}>Ruudukko</Text>
+                <Text style={styles.layoutOptionIcon}>⊞</Text>
+                <Text style={styles.layoutOptionText}>Ruudukko</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.layoutOption, tempLayout === 'masonry' && styles.layoutOptionActive]}
+                style={[styles.layoutOption, tempLayout === 'masonry' && styles.layoutOptionSelected]}
                 onPress={() => setTempLayout('masonry')}
               >
-                <Text style={styles.layoutIcon}>⊟</Text>
-                <Text style={styles.layoutName}>Mosaiikki</Text>
+                <Text style={styles.layoutOptionIcon}>⊟</Text>
+                <Text style={styles.layoutOptionText}>Masonry</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.layoutOption, tempLayout === 'magazine' && styles.layoutOptionActive]}
+                style={[styles.layoutOption, tempLayout === 'magazine' && styles.layoutOptionSelected]}
                 onPress={() => setTempLayout('magazine')}
               >
-                <Text style={styles.layoutIcon}>▭</Text>
-                <Text style={styles.layoutName}>Lehti</Text>
+                <Text style={styles.layoutOptionIcon}>🗞️</Text>
+                <Text style={styles.layoutOptionText}>Lehti</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.layoutOption, tempLayout === 'full' && styles.layoutOptionSelected]}
+                onPress={() => setTempLayout('full')}
+              >
+                <Text style={styles.layoutOptionIcon}>▭</Text>
+                <Text style={styles.layoutOptionText}>Täysi</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.layoutOption, tempLayout === 'framed' && styles.layoutOptionSelected]}
+                onPress={() => setTempLayout('framed')}
+              >
+                <Text style={styles.layoutOptionIcon}>🖼️</Text>
+                <Text style={styles.layoutOptionText}>Kehykset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.layoutOption, tempLayout === 'overlay' && styles.layoutOptionSelected]}
+                onPress={() => setTempLayout('overlay')}
+              >
+                <Text style={styles.layoutOptionIcon}>🎭</Text>
+                <Text style={styles.layoutOptionText}>Overlay</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Text Position */}
-            <Text style={styles.sectionTitle}>Tekstin sijainti</Text>
-            <View style={styles.optionsRow}>
+            <View style={styles.layoutModalButtons}>
               <TouchableOpacity
-                style={[styles.layoutOption, tempTextPosition === 'top' && styles.layoutOptionActive]}
-                onPress={() => setTempTextPosition('top')}
+                style={styles.layoutModalCancelButton}
+                onPress={() => setShowLayoutSelector(false)}
               >
-                <Text style={styles.layoutIcon}>⬆️</Text>
-                <Text style={styles.layoutName}>Ylhäällä</Text>
+                <Text style={styles.layoutModalCancelText}>Peruuta</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.layoutOption, tempTextPosition === 'middle' && styles.layoutOptionActive]}
-                onPress={() => setTempTextPosition('middle')}
-              >
-                <Text style={styles.layoutIcon}>↔️</Text>
-                <Text style={styles.layoutName}>Keskellä</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.layoutOption, tempTextPosition === 'bottom' && styles.layoutOptionActive]}
-                onPress={() => setTempTextPosition('bottom')}
-              >
-                <Text style={styles.layoutIcon}>⬇️</Text>
-                <Text style={styles.layoutName}>Alhaalla</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Image Shape */}
-            <Text style={styles.sectionTitle}>Kuvien muoto</Text>
-            <View style={styles.optionsRow}>
-              <TouchableOpacity
-                style={[styles.layoutOption, tempImageShape === 'square' && styles.layoutOptionActive]}
-                onPress={() => setTempImageShape('square')}
-              >
-                <Text style={styles.layoutIcon}>◻️</Text>
-                <Text style={styles.layoutName}>Neliö</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.layoutOption, tempImageShape === 'circle' && styles.layoutOptionActive]}
-                onPress={() => setTempImageShape('circle')}
-              >
-                <Text style={styles.layoutIcon}>⚫</Text>
-                <Text style={styles.layoutName}>Pyöreä</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.layoutOption, tempImageShape === 'landscape' && styles.layoutOptionActive]}
-                onPress={() => setTempImageShape('landscape')}
-              >
-                <Text style={styles.layoutIcon}>▬</Text>
-                <Text style={styles.layoutName}>Vaaka</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Text Overlay */}
-            <TouchableOpacity
-              style={[styles.overlayToggle, tempTextOverlay && styles.overlayToggleActive]}
-              onPress={() => setTempTextOverlay(!tempTextOverlay)}
-            >
-              <Text style={styles.overlayToggleIcon}>{tempTextOverlay ? '☑️' : '⬜'}</Text>
-              <View>
-                <Text style={styles.layoutName}>Teksti kuvien päällä</Text>
-                <Text style={styles.layoutDescription}>Teksti näkyy gradienttitaustalla kuvien yllä</Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalCancelButton}
-                onPress={() => setLayoutModalVisible(false)}
-              >
-                <Text style={styles.modalCancelText}>Peruuta</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalSaveButton}
+                style={styles.layoutModalApplyButton}
                 onPress={async () => {
-                  console.log('Saving layout:', tempLayout);
                   setLayout(tempLayout);
-                  setTextPosition(tempTextPosition);
-                  setImageShape(tempImageShape);
-                  setTextOverlay(tempTextOverlay);
-                  setLayoutModalVisible(false);
+                  setShowLayoutSelector(false);
                   
-                  // Tallennetaan asetukset tietokantaan
-                  await updateEntry(entry.id, {
-                    layout: tempLayout,
-                    textPosition: tempTextPosition,
-                    imageShape: tempImageShape,
-                    textOverlay: tempTextOverlay,
-                  });
-                  onUpdate?.();
+                  // Tallenna layout Firestoreen
+                  try {
+                    await updateEntry(entry.id, { layout: tempLayout });
+                    setEntry({ ...entry, layout: tempLayout });
+                  } catch (error) {
+                    console.error('Error saving layout:', error);
+                    Alert.alert('Virhe', 'Asettelun tallentaminen epäonnistui');
+                  }
                 }}
               >
-                <Text style={styles.modalSaveText}>Tallenna</Text>
+                <Text style={styles.layoutModalApplyText}>Käytä tätä asettelua</Text>
               </TouchableOpacity>
             </View>
-            </ScrollView>
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
     </View>
   );
@@ -787,16 +860,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 60,
-    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    paddingTop: spacing.xl + 10,
     backgroundColor: colors.white,
     borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    borderBottomColor: colors.gray50,
     ...shadows.sm,
   },
   backButton: {
-    ...commonStyles.body,
+    fontSize: typography.fontSizes.lg,
     color: colors.primary,
     fontWeight: typography.fontWeights.semibold,
   },
@@ -807,85 +880,108 @@ const styles = StyleSheet.create({
   iconButton: {
     width: 40,
     height: 40,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.gray100,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray50,
     justifyContent: 'center',
     alignItems: 'center',
   },
   iconButtonText: {
-    fontSize: typography.fontSizes.lg,
+    fontSize: 20,
   },
   textButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: borderRadius.md,
   },
   cancelButtonText: {
-    ...commonStyles.body,
+    fontSize: typography.fontSizes.md,
     color: colors.textSecondary,
     fontWeight: typography.fontWeights.semibold,
   },
   saveButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: borderRadius.md,
     backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
   },
   saveButtonText: {
-    ...commonStyles.body,
+    fontSize: typography.fontSizes.md,
     color: colors.white,
     fontWeight: typography.fontWeights.semibold,
-  },
-  content: {
-    flex: 1,
   },
   scrollContent: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  contentContainer: {
     padding: spacing.lg,
   },
-  dateHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-  },
-  dateBox: {
-    width: 80,
-    height: 80,
-    borderRadius: borderRadius.xl,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.md,
-    ...shadows.md,
-  },
-  dayNumber: {
-    fontSize: typography.fontSizes.xxxl,
-    fontWeight: typography.fontWeights.bold,
-    color: colors.white,
-    lineHeight: typography.fontSizes.xxxl,
-  },
-  monthYear: {
-    fontSize: typography.fontSizes.xs,
-    fontWeight: typography.fontWeights.semibold,
-    color: colors.white,
-    textTransform: 'uppercase',
-    marginTop: spacing.xs,
-  },
-  dateInfo: {
-    flex: 1,
+  dateSection: {
+    marginBottom: spacing.lg,
   },
   dateText: {
-    ...commonStyles.heading3,
-    marginBottom: spacing.xs,
+    fontSize: typography.fontSizes.lg,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+    textTransform: 'capitalize',
   },
   timeText: {
-    ...commonStyles.bodySecondary,
+    fontSize: typography.fontSizes.md,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
   title: {
-    ...commonStyles.heading1,
+    fontSize: typography.fontSizes.xxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
     marginBottom: spacing.lg,
+  },
+  locationSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gray50,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  locationIcon: {
+    fontSize: 20,
+  },
+  locationText: {
+    fontSize: typography.fontSizes.md,
+    color: colors.textSecondary,
+    flex: 1,
+  },
+  removeLocationText: {
+    fontSize: 24,
+    color: colors.textSecondary,
+    fontWeight: '300',
+    paddingHorizontal: spacing.sm,
+  },
+  addLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gray50,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: colors.gray200,
+  },
+  addLocationIcon: {
+    fontSize: 20,
+  },
+  addLocationText: {
+    fontSize: typography.fontSizes.md,
+    color: colors.textSecondary,
+    fontWeight: typography.fontWeights.medium,
   },
   titleInput: {
-    ...commonStyles.heading1,
+    fontSize: typography.fontSizes.xxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
     marginBottom: spacing.lg,
     padding: spacing.md,
     backgroundColor: colors.gray50,
@@ -893,125 +989,205 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.primary,
   },
-  contentText: {
-    ...commonStyles.body,
-    lineHeight: typography.fontSizes.md * typography.lineHeights.relaxed,
-    marginBottom: spacing.xl,
-  },
-  contentInput: {
-    ...commonStyles.body,
-    lineHeight: typography.fontSizes.md * typography.lineHeights.relaxed,
-    marginBottom: spacing.xl,
-    padding: spacing.md,
-    backgroundColor: colors.gray50,
-    borderRadius: borderRadius.md,
-    borderWidth: 2,
-    borderColor: colors.primary,
-    minHeight: 150,
-  },
+  
   // Grid Layout
-  gridLayout: {
+  gridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: spacing.xl,
-    marginHorizontal: -spacing.xs,
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
   gridImageWrapper: {
-    width: '48%',
-    aspectRatio: 1,
+    position: 'relative',
+    width: (width - spacing.lg * 2 - spacing.sm) / 2,
+    height: 200,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    position: 'relative',
-    marginHorizontal: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  circleImage: {
-    borderRadius: borderRadius.full,
-  },
-  landscapeImage: {
-    aspectRatio: 16 / 9,
   },
   gridImage: {
     width: '100%',
     height: '100%',
   },
-  gridAddButton: {
-    width: '48%',
-    aspectRatio: 1,
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
-  },
-  gridAddIcon: {
-    fontSize: typography.fontSizes.xxxl,
-    color: colors.textLight,
-  },
-  // Masonry Layout
-  masonryLayout: {
+
+  // Masonry Layout  
+  masonryContainer: {
     flexDirection: 'row',
-    marginBottom: spacing.xl,
-    marginHorizontal: -spacing.xs,
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
   masonryColumn: {
     flex: 1,
-    marginHorizontal: spacing.xs,
+    gap: spacing.sm,
   },
   masonryImageWrapper: {
+    position: 'relative',
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    position: 'relative',
-    marginBottom: spacing.sm,
   },
   masonryImage: {
     width: '100%',
+    height: '100%',
   },
-  masonryAddButton: {
-    position: 'absolute',
-    bottom: spacing.md,
-    right: spacing.md,
-    width: 60,
-    height: 60,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...shadows.xl,
-  },
+
   // Magazine Layout
-  magazineLayout: {
-    marginBottom: spacing.xl,
+  magazineContainer: {
+    marginBottom: spacing.lg,
   },
-  magazineImageWrapper: {
+  magazineLargeWrapper: {
+    position: 'relative',
+    height: 400,
+    marginBottom: spacing.sm,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    position: 'relative',
-    marginBottom: spacing.sm,
   },
-  magazineHero: {
-    height: 300,
-  },
-  magazineSmall: {
-    height: 150,
-  },
-  magazineImage: {
+  magazineLarge: {
     width: '100%',
     height: '100%',
   },
-  magazineAddButton: {
-    height: 100,
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
+  magazineSmallRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
-  // Common image buttons
+  magazineSmallWrapper: {
+    position: 'relative',
+    flex: 1,
+    height: 120,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+  },
+  magazineSmall: {
+    width: '100%',
+    height: '100%',
+  },
+
+  // Full Width Layout
+  fullContainer: {
+    marginBottom: spacing.lg,
+  },
+  fullImageWrapper: {
+    position: 'relative',
+    marginBottom: spacing.md,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+  },
+  fullImage: {
+    width: '100%',
+    height: 300,
+  },
+
+  // Framed Layout (puukehykset)
+  framedContainer: {
+    marginBottom: spacing.lg,
+  },
+  framedImageWrapper: {
+    marginBottom: spacing.xl,
+    alignItems: 'center',
+  },
+  woodFrame: {
+    padding: 16,
+    backgroundColor: '#8B4513',
+    borderRadius: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 3,
+    borderColor: '#654321',
+    position: 'relative',
+  },
+  framedImage: {
+    width: width - spacing.lg * 4 - 32,
+    height: 350,
+    borderWidth: 2,
+    borderColor: '#DEB887',
+  },
+
+  // Overlay Layout (teksti kuvan päällä)
+  overlayContainer: {
+    marginBottom: spacing.lg,
+  },
+  overlayImageWrapper: {
+    position: 'relative',
+    height: 500,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
+  },
+  overlayBackgroundImage: {
+    width: '100%',
+    height: '100%',
+  },
+  overlayGradient: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '70%',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+  },
+  overlayTextContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: spacing.xl,
+  },
+  overlayTitle: {
+    fontSize: typography.fontSizes.xxxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.white,
+    marginBottom: spacing.md,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  overlayContent: {
+    fontSize: typography.fontSizes.lg,
+    lineHeight: 28,
+    color: colors.white,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  overlayTitleInput: {
+    fontSize: typography.fontSizes.xxxl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.white,
+    marginBottom: spacing.md,
+    padding: spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  overlayContentInput: {
+    fontSize: typography.fontSizes.lg,
+    lineHeight: 28,
+    color: colors.white,
+    padding: spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    minHeight: 120,
+  },
+  overlayThumbnailRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  overlayThumbnail: {
+    position: 'relative',
+    flex: 1,
+    height: 100,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  overlayThumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+
   removeImageButton: {
     position: 'absolute',
     top: spacing.sm,
@@ -1019,194 +1195,181 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: borderRadius.full,
-    backgroundColor: colors.error,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
-    ...shadows.md,
   },
   removeImageText: {
     color: colors.white,
-    fontSize: typography.fontSizes.xxl,
+    fontSize: 18,
     fontWeight: typography.fontWeights.bold,
-    lineHeight: typography.fontSizes.xxl,
   },
   addImageButton: {
-    height: 150,
+    padding: spacing.lg,
+    backgroundColor: colors.gray50,
     borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.xl,
     borderWidth: 2,
-    borderColor: colors.border,
     borderStyle: 'dashed',
-  },
-  addImageIcon: {
-    fontSize: typography.fontSizes.display,
-    marginBottom: spacing.sm,
+    borderColor: colors.gray200,
+    alignItems: 'center',
+    marginBottom: spacing.lg,
   },
   addImageText: {
-    ...commonStyles.body,
-    color: colors.textSecondary,
+    fontSize: typography.fontSizes.md,
+    color: colors.primary,
     fontWeight: typography.fontWeights.semibold,
   },
-  locationSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  content: {
+    fontSize: typography.fontSizes.lg,
+    lineHeight: 28,
+    color: colors.text,
+    marginBottom: spacing.xl,
+  },
+  contentInput: {
+    fontSize: typography.fontSizes.lg,
+    lineHeight: 28,
+    color: colors.text,
+    marginBottom: spacing.xl,
     padding: spacing.md,
     backgroundColor: colors.gray50,
-    borderRadius: borderRadius.lg,
-    marginBottom: spacing.lg,
-  },
-  locationIcon: {
-    fontSize: typography.fontSizes.xl,
-    marginRight: spacing.sm,
-  },
-  locationText: {
-    ...commonStyles.body,
-    flex: 1,
+    borderRadius: borderRadius.md,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    minHeight: 200,
   },
   metadata: {
+    marginTop: spacing.xl,
     paddingTop: spacing.lg,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
+    borderTopColor: colors.gray100,
   },
   metadataText: {
-    ...commonStyles.caption,
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
     marginBottom: spacing.xs,
   },
-  // Text Overlay styles
-  overlayContainer: {
-    minHeight: 400,
-    position: 'relative',
-  },
-  overlayBackgroundImage: {
-    position: 'absolute',
-    top: 0,
-    left: -spacing.lg,
-    right: -spacing.lg,
-    height: 500,
-    width: '120%',
-  },
-  overlayGradient: {
-    position: 'absolute',
-    top: 0,
-    left: -spacing.lg,
-    right: -spacing.lg,
-    height: 500,
-    width: '120%',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  overlayTextContainer: {
-    position: 'relative',
-    zIndex: 1,
-    paddingVertical: spacing.xl,
-  },
-  overlayAdditionalImages: {
-    marginTop: spacing.xl,
-  },
-  // Modal
-  modalOverlay: {
+
+  // Modal styles
+  modalContainer: {
     flex: 1,
-    backgroundColor: colors.overlay,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: {
-    width: '85%',
-    maxHeight: '80%',
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    padding: spacing.xl,
-    ...shadows.xl,
+  modalBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  modalTitle: {
-    ...commonStyles.heading2,
+  modalImage: {
+    width: '90%',
+    height: '70%',
+  },
+  modalToolbar: {
+    position: 'absolute',
+    bottom: 40,
+    flexDirection: 'row',
+    gap: spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.full,
+    ...shadows.lg,
+  },
+  toolbarButton: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.full,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  closeButton: {
+    backgroundColor: colors.gray300,
+  },
+  toolbarButtonText: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.white,
+  },
+  
+  // Layout Selector Modal
+  layoutModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  layoutModalContent: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+    padding: spacing.xl,
+    paddingBottom: spacing.xl + 20,
+  },
+  layoutModalTitle: {
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
     marginBottom: spacing.lg,
     textAlign: 'center',
   },
-  sectionTitle: {
-    ...commonStyles.heading3,
-    marginTop: spacing.md,
-    marginBottom: spacing.sm,
-    color: colors.textSecondary,
-  },
-  optionsRow: {
+  layoutOptionsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    marginBottom: spacing.xl,
   },
   layoutOption: {
-    flex: 1,
-    alignItems: 'center',
-    padding: spacing.md,
-    borderRadius: borderRadius.lg,
-    marginHorizontal: spacing.xs,
+    width: (width - spacing.xl * 2 - spacing.md * 2) / 3,
+    aspectRatio: 1,
     backgroundColor: colors.gray50,
-  },
-  layoutOptionActive: {
-    backgroundColor: colors.primaryLight + '20',
+    borderRadius: borderRadius.lg,
+    justifyContent: 'center',
+    alignItems: 'center',
     borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  layoutOptionSelected: {
+    backgroundColor: colors.primary + '20',
     borderColor: colors.primary,
   },
-  layoutIcon: {
-    fontSize: typography.fontSizes.xxl,
-    marginBottom: spacing.xs,
+  layoutOptionIcon: {
+    fontSize: 32,
+    marginBottom: spacing.sm,
   },
-  layoutName: {
-    ...commonStyles.body,
+  layoutOptionText: {
+    fontSize: typography.fontSizes.sm,
     fontWeight: typography.fontWeights.semibold,
-    textAlign: 'center',
+    color: colors.text,
   },
-  layoutDescription: {
-    ...commonStyles.caption,
-    textAlign: 'center',
-  },
-  overlayToggle: {
+  layoutModalButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.md,
-    borderRadius: borderRadius.lg,
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
-    backgroundColor: colors.gray50,
+    gap: spacing.md,
   },
-  overlayToggleActive: {
-    backgroundColor: colors.primaryLight + '20',
-    borderWidth: 2,
-    borderColor: colors.primary,
-  },
-  overlayToggleIcon: {
-    fontSize: typography.fontSizes.xxl,
-    marginRight: spacing.md,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    marginTop: spacing.lg,
-    gap: spacing.sm,
-  },
-  modalCancelButton: {
+  layoutModalCancelButton: {
     flex: 1,
-    padding: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.gray200,
     borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray100,
     alignItems: 'center',
   },
-  modalCancelText: {
-    ...commonStyles.body,
+  layoutModalCancelText: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
     color: colors.textSecondary,
-    fontWeight: typography.fontWeights.semibold,
   },
-  modalSaveButton: {
-    flex: 1,
-    padding: spacing.md,
-    borderRadius: borderRadius.lg,
+  layoutModalApplyButton: {
+    flex: 2,
+    paddingVertical: spacing.md,
     backgroundColor: colors.primary,
+    borderRadius: borderRadius.lg,
     alignItems: 'center',
   },
-  modalSaveText: {
-    ...commonStyles.body,
+  layoutModalApplyText: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.bold,
     color: colors.white,
-    fontWeight: typography.fontWeights.semibold,
   },
 });

@@ -9,8 +9,9 @@ export interface DiaryEntry {
     longitude: number;
     address?: string;
   };
+  shared?: boolean; // Indicates if the entry has been shared
   // Layout settings
-  layout?: 'grid' | 'masonry' | 'magazine';
+  layout?: 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
   textPosition?: 'top' | 'middle' | 'bottom';
   imageShape?: 'square' | 'circle' | 'landscape';
   textOverlay?: boolean;

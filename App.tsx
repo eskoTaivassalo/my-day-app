@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Text, ActivityIndicator, View, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import { initializeNotifications } from './src/services/notificationService';
 
 // Ignore Firebase AsyncStorage warning
 LogBox.ignoreLogs([
@@ -25,6 +26,7 @@ import DocumentDetailScreen from './src/screens/DocumentDetailScreen';
 import NewEntryScreen from './src/screens/NewEntryScreen';
 import EntryDetailScreen from './src/screens/EntryDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import AchievementsScreen from './src/screens/AchievementsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -131,6 +133,13 @@ function AppNavigator() {
         }}
       />
       <Stack.Screen
+        name="Achievements"
+        component={AchievementsScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="DocumentDetail"
         component={DocumentDetailScreen}
         options={{
@@ -145,7 +154,12 @@ function AppNavigator() {
 function RootNavigator() {
   const { user, loading } = useAuth();
 
-  console.log('RootNavigator: loading:', loading, 'user:', user ? 'logged in' : 'not logged in');
+  useEffect(() => {
+    if (user) {
+      // Initialize notifications when user is logged in
+      initializeNotifications();
+    }
+  }, [user]);
 
   if (loading) {
     return (

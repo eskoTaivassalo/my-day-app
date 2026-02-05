@@ -8,6 +8,7 @@ import {
   Dimensions,
   Image,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { Document } from '../types/Document';
 import { useAuth } from '../contexts/AuthContext';
@@ -41,6 +42,15 @@ export default function CalendarScreen({ navigation }: any) {
       loadEntries();
     }
   }, [user]);
+
+  // Ladataan entryt uudelleen kun palataan tähän screeniin
+  useFocusEffect(
+    React.useCallback(() => {
+      if (user) {
+        loadEntries();
+      }
+    }, [user])
+  );
 
   useEffect(() => {
     generateCalendar();
@@ -170,7 +180,14 @@ export default function CalendarScreen({ navigation }: any) {
   };
 
   const handleEntryPress = (entry: DiaryEntry) => {
-    navigation.navigate('EntryDetail', { entry });
+    navigation.navigate('EntryDetail', { 
+      entry: {
+        ...entry,
+        date: entry.date instanceof Date ? entry.date.toISOString() : entry.date,
+        createdAt: entry.createdAt instanceof Date ? entry.createdAt.toISOString() : entry.createdAt,
+        updatedAt: entry.updatedAt instanceof Date ? entry.updatedAt.toISOString() : entry.updatedAt,
+      }
+    });
   };
 
   const handleDocumentPress = (document: Document) => {

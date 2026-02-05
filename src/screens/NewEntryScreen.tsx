@@ -13,8 +13,12 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { createEntry, uploadImages } from '../services/diaryService';
+import { colors, spacing, borderRadius, typography } from '../theme/theme';
+
+type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
 
 export default function NewEntryScreen({ navigation }: any) {
   const [title, setTitle] = useState('');
@@ -22,14 +26,48 @@ export default function NewEntryScreen({ navigation }: any) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [layout, setLayout] = useState<LayoutType>('grid');
   const [saving, setSaving] = useState(false);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number; address?: string } | null>(null);
+  const [loadingLocation, setLoadingLocation] = useState(false);
   const { user } = useAuth();
 
+  const getLocation = async () => {
+    setLoadingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Lupa tarvitaan', 'Sijainnin käyttöoikeus tarvitaan paikan lisäämiseen.');
+        return;
+      }
 
+      const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = currentLocation.coords;
+
+      // Hae osoite koordinaateista
+      try {
+        const [addressData] = await Location.reverseGeocodeAsync({ latitude, longitude });
+        const address = addressData
+          ? `${addressData.city || ''}, ${addressData.country || ''}`.trim().replace(/^,\s*/, '')
+          : undefined;
+        
+        setLocation({ latitude, longitude, address });
+        Alert.alert('Sijainti lisätty', address || 'Sijainti tallennettu');
+      } catch {
+        setLocation({ latitude, longitude });
+        Alert.alert('Sijainti lisätty', 'Sijainti tallennettu');
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert('Virhe', 'Sijainnin hakeminen epäonnistui');
+    } finally {
+      setLoadingLocation(false);
+    }
+  };
 
   const pickImageFromGallery = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.8,
     });
@@ -60,6 +98,92 @@ export default function NewEntryScreen({ navigation }: any) {
 
   const removeSelectedImage = (uri: string) => {
     setSelectedImages(selectedImages.filter((img) => img !== uri));
+  };
+
+  const renderImages = () => {
+    if (selectedImages.length === 0) return null;
+
+    const imageWidth = 280;
+
+    switch (layout) {
+      case 'grid':
+        return (
+          <View style={previewStyles.gridContainer}>
+            {selectedImages.map((uri, index) => (
+              <Image key={index} source={{ uri }} style={previewStyles.gridImage} />
+            ))}
+          </View>
+        );
+
+      case 'masonry':
+        const leftImages = selectedImages.filter((_, i) => i % 2 === 0);
+        const rightImages = selectedImages.filter((_, i) => i % 2 === 1);
+        return (
+          <View style={previewStyles.masonryContainer}>
+            <View style={previewStyles.masonryColumn}>
+              {leftImages.map((uri, index) => (
+                <Image key={index} source={{ uri }} style={previewStyles.masonryImage} />
+              ))}
+            </View>
+            <View style={previewStyles.masonryColumn}>
+              {rightImages.map((uri, index) => (
+                <Image key={index} source={{ uri }} style={previewStyles.masonryImage} />
+              ))}
+            </View>
+          </View>
+        );
+
+      case 'magazine':
+        if (selectedImages.length === 1) {
+          return <Image source={{ uri: selectedImages[0] }} style={previewStyles.magazineSingleImage} />;
+        }
+        return (
+          <View style={previewStyles.magazineContainer}>
+            <Image source={{ uri: selectedImages[0] }} style={previewStyles.magazineMainImage} />
+            <View style={previewStyles.magazineThumbnails}>
+              {selectedImages.slice(1, 3).map((uri, index) => (
+                <Image key={index} source={{ uri }} style={previewStyles.magazineThumbnail} />
+              ))}
+            </View>
+          </View>
+        );
+
+      case 'full':
+        return (
+          <View style={previewStyles.fullContainer}>
+            {selectedImages.map((uri, index) => (
+              <Image key={index} source={{ uri }} style={previewStyles.fullImage} />
+            ))}
+          </View>
+        );
+
+      case 'framed':
+        return (
+          <View style={previewStyles.framedContainer}>
+            {selectedImages.map((uri, index) => (
+              <View key={index} style={previewStyles.framedImageWrapper}>
+                <Image source={{ uri }} style={previewStyles.framedImage} />
+              </View>
+            ))}
+          </View>
+        );
+
+      case 'overlay':
+        if (selectedImages.length === 0) return null;
+        return (
+          <View style={previewStyles.overlayContainer}>
+            <Image source={{ uri: selectedImages[0] }} style={previewStyles.overlayBackground} blurRadius={1} />
+            <View style={previewStyles.overlayDark} />
+            <View style={previewStyles.overlayTextContainer}>
+              <Text style={previewStyles.overlayTitle}>{title || 'Otsikko'}</Text>
+              <Text style={previewStyles.overlayContent} numberOfLines={3}>{content || 'Sisältö'}</Text>
+            </View>
+          </View>
+        );
+
+      default:
+        return null;
+    }
   };
 
   const handleSave = async () => {
@@ -93,6 +217,8 @@ export default function NewEntryScreen({ navigation }: any) {
           content: content.trim(),
           images: imageUrls,
           date: selectedDate,
+          layout: layout,
+          ...(location && { location }), // Lisää location vain jos se on olemassa
         },
         user.uid
       );
@@ -134,94 +260,190 @@ export default function NewEntryScreen({ navigation }: any) {
       </View>
 
       <ScrollView style={styles.content}>
-        {/* Date Selector */}
-        <View style={styles.dateSection}>
-          <Text style={styles.sectionTitle}>Päivämäärä</Text>
+        {/* INTERACTIVE PREVIEW CARD */}
+        <View style={styles.previewCard}>
+          {/* Date Header - Clickable */}
           <TouchableOpacity 
-            style={styles.dateButton}
+            style={previewStyles.entryHeader}
             onPress={() => setShowDatePicker(true)}
           >
-            <Text style={styles.dateButtonText}>📅</Text>
-            <Text style={styles.dateText}>
-              {selectedDate.toLocaleDateString('fi-FI', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-              })}
-            </Text>
+            <View style={previewStyles.dateContainer}>
+              <Text style={previewStyles.dayNumber}>
+                {selectedDate.getDate()}
+              </Text>
+              <Text style={previewStyles.monthText}>
+                {selectedDate.toLocaleDateString('fi-FI', { month: 'short' })}
+              </Text>
+            </View>
+            
+            <View style={previewStyles.entryHeaderContent}>
+              <Text style={previewStyles.entryDate}>
+                {selectedDate.toLocaleDateString('fi-FI', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'long'
+                })}
+              </Text>
+              <Text style={previewStyles.entryTime}>
+                Napauta vaihtaaksesi päivää 📅
+              </Text>
+            </View>
           </TouchableOpacity>
-        </View>
 
-        {showDatePicker && (
-          <DateTimePicker
-            value={selectedDate}
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={(event, date) => {
-              setShowDatePicker(Platform.OS === 'ios');
-              if (date) {
-                setSelectedDate(date);
-              }
-            }}
-            maximumDate={new Date()}
+          {showDatePicker && (
+            <DateTimePicker
+              value={selectedDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, date) => {
+                setShowDatePicker(Platform.OS === 'ios');
+                if (date) {
+                  setSelectedDate(date);
+                }
+              }}
+              maximumDate={new Date()}
+            />
+          )}
+
+          {/* Title Input - Inline */}
+          <TextInput
+            style={previewStyles.titleInput}
+            placeholder="Anna merkinnälle otsikko..."
+            placeholderTextColor="#999"
+            value={title}
+            onChangeText={setTitle}
+            maxLength={100}
           />
-        )}
 
-        {/* Title Input */}
-        <TextInput
-          style={styles.titleInput}
-          placeholder="Otsikko..."
-          placeholderTextColor="#999"
-          value={title}
-          onChangeText={setTitle}
-          maxLength={100}
-        />
+          {/* Content Input - Inline */}
+          <TextInput
+            style={previewStyles.contentInput}
+            placeholder="Mitä tänään tapahtui? Kirjoita tähän..."
+            placeholderTextColor="#999"
+            value={content}
+            onChangeText={setContent}
+            multiline
+            textAlignVertical="top"
+          />
 
-        {/* Content Input */}
-        <TextInput
-          style={styles.contentInput}
-          placeholder="Mitä tänään tapahtui?"
-          placeholderTextColor="#999"
-          value={content}
-          onChangeText={setContent}
-          multiline
-          textAlignVertical="top"
-        />
+          {/* Images with layout */}
+          {renderImages()}
 
-        {/* Selected Images */}
-        {selectedImages.length > 0 && (
-          <View style={styles.selectedImagesSection}>
-            <Text style={styles.sectionTitle}>Valitut kuvat ({selectedImages.length})</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.selectedImagesContainer}>
+          {/* Image Controls - Compact */}
+          <View style={styles.imageControls}>
+            <TouchableOpacity style={styles.compactButton} onPress={takePhoto}>
+              <Text style={styles.compactButtonIcon}>📷</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.compactButton} onPress={pickImageFromGallery}>
+              <Text style={styles.compactButtonIcon}>🖼️</Text>
+            </TouchableOpacity>
+
+            {selectedImages.length > 0 && (
+              <>
+                <View style={styles.buttonDivider} />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.layoutScroll}>
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'grid' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('grid')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>⊞</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'masonry' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('masonry')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>⊟</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'magazine' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('magazine')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>🗞️</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'full' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('full')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>▭</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'framed' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('framed')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>🖼️</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.layoutCompactButton, layout === 'overlay' && styles.layoutCompactButtonActive]}
+                    onPress={() => setLayout('overlay')}
+                  >
+                    <Text style={styles.layoutCompactIcon}>🎭</Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              </>
+            )}
+          </View>
+
+          {/* Selected Images Thumbnails */}
+          {selectedImages.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailScroll}>
+              <View style={styles.thumbnailContainer}>
                 {selectedImages.map((uri, index) => (
-                  <View key={index} style={styles.selectedImageWrapper}>
-                    <Image source={{ uri }} style={styles.selectedImage} />
+                  <View key={index} style={styles.thumbnailWrapper}>
+                    <Image source={{ uri }} style={styles.thumbnailImage} />
                     <TouchableOpacity
-                      style={styles.removeImageButton}
+                      style={styles.removeThumbnailButton}
                       onPress={() => removeSelectedImage(uri)}
                     >
-                      <Text style={styles.removeImageText}>×</Text>
+                      <Text style={styles.removeThumbnailText}>×</Text>
                     </TouchableOpacity>
                   </View>
                 ))}
               </View>
             </ScrollView>
+          )}
+
+          {/* Location - Inline */}
+          {location ? (
+            <View style={previewStyles.locationContainer}>
+              <Text style={previewStyles.locationIcon}>📍</Text>
+              <Text style={previewStyles.locationText}>
+                {location.address || `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`}
+              </Text>
+              <TouchableOpacity onPress={() => setLocation(null)}>
+                <Text style={styles.removeLocationButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={styles.addLocationButton}
+              onPress={getLocation}
+              disabled={loadingLocation}
+            >
+              <Text style={styles.addLocationIcon}>📍</Text>
+              <Text style={styles.addLocationText}>
+                {loadingLocation ? 'Haetaan sijaintia...' : 'Lisää sijainti'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Footer Stats */}
+          <View style={previewStyles.entryFooter}>
+            <Text style={previewStyles.footerHint}>
+              Näin merkintäsi näkyy aikajanalla
+            </Text>
+            {selectedImages.length > 0 && (
+              <View style={previewStyles.stat}>
+                <Text style={previewStyles.statIcon}>📷</Text>
+                <Text style={previewStyles.statText}>{selectedImages.length}</Text>
+              </View>
+            )}
           </View>
-        )}
-
-        {/* Image Actions */}
-        <View style={styles.imageActions}>
-          <TouchableOpacity style={styles.actionButton} onPress={takePhoto}>
-            <Text style={styles.actionButtonIcon}>📷</Text>
-            <Text style={styles.actionButtonText}>Ota kuva</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionButton} onPress={pickImageFromGallery}>
-            <Text style={styles.actionButtonIcon}>🖼️</Text>
-            <Text style={styles.actionButtonText}>Valitse galleriasta</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -263,6 +485,117 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
   },
+  previewCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  imageControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  compactButton: {
+    width: 48,
+    height: 48,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  compactButtonIcon: {
+    fontSize: 24,
+  },
+  buttonDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: '#e0e0e0',
+    marginHorizontal: 8,
+  },
+  layoutScroll: {
+    flex: 1,
+  },
+  layoutCompactButton: {
+    width: 44,
+    height: 44,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  layoutCompactButtonActive: {
+    backgroundColor: '#e3f2fd',
+    borderColor: '#2196F3',
+  },
+  layoutCompactIcon: {
+    fontSize: 20,
+  },
+  thumbnailScroll: {
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  thumbnailContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  thumbnailWrapper: {
+    position: 'relative',
+  },
+  thumbnailImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+  },
+  removeThumbnailButton: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#FF3B30',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeThumbnailText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    lineHeight: 14,
+  },
+  addLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    padding: 12,
+    borderRadius: 12,
+    gap: 8,
+    marginTop: 12,
+  },
+  addLocationIcon: {
+    fontSize: 18,
+  },
+  addLocationText: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  removeLocationButton: {
+    fontSize: 24,
+    color: '#666',
+    fontWeight: '300',
+    paddingHorizontal: 8,
+  },
   dateSection: {
     marginBottom: 16,
   },
@@ -283,90 +616,254 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textTransform: 'capitalize',
   },
-  titleInput: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 16,
-    padding: 8,
-  },
-  contentInput: {
-    fontSize: 16,
-    color: '#333',
-    minHeight: 200,
-    padding: 8,
-    lineHeight: 24,
-  },
-  selectedImagesSection: {
-    marginTop: 16,
-    marginBottom: 16,
-  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#333',
     marginBottom: 8,
   },
-  sectionSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 12,
-  },
-  selectedImagesContainer: {
+
+});
+
+const previewStyles = StyleSheet.create({
+  entryHeader: {
     flexDirection: 'row',
-    gap: 12,
+    alignItems: 'center',
+    marginBottom: spacing.md,
   },
-  selectedImageWrapper: {
-    position: 'relative',
-  },
-  selectedImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 8,
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: -8,
-    right: -8,
-    backgroundColor: '#FF3B30',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  dateContainer: {
+    width: 60,
+    height: 60,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.lg,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  dayNumber: {
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.white,
+  },
+  monthText: {
+    fontSize: typography.fontSizes.xs,
+    color: colors.white,
+    textTransform: 'uppercase',
+  },
+  entryHeaderContent: {
+    flex: 1,
+  },
+  entryDate: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+    marginBottom: 2,
+    textTransform: 'capitalize',
+  },
+  entryTime: {
+    fontSize: typography.fontSizes.xs,
+    color: colors.textSecondary,
+  },
+  titleInput: {
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
+    marginBottom: spacing.md,
+    padding: spacing.sm,
+    backgroundColor: colors.gray50,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.gray200,
+  },
+  contentInput: {
+    fontSize: typography.fontSizes.md,
+    lineHeight: 22,
+    color: colors.text,
+    marginBottom: spacing.md,
+    padding: spacing.sm,
+    backgroundColor: colors.gray50,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.gray200,
+    minHeight: 120,
+  },
+  entryContent: {
+    fontSize: typography.fontSizes.md,
+    lineHeight: 22,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  entryFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.gray100,
+  },
+  footerHint: {
+    fontSize: typography.fontSizes.xs,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  locationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gray50,
+    padding: spacing.sm,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  locationIcon: {
+    fontSize: 14,
+  },
+  locationText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+    flex: 1,
+  },
+  entryStats: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  stat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  statIcon: {
+    fontSize: 14,
+  },
+  statText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+  },
+
+  // Grid Layout
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  gridImage: {
+    width: 130,
+    height: 130,
+    borderRadius: borderRadius.md,
+  },
+
+  // Masonry Layout
+  masonryContainer: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  masonryColumn: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  masonryImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: borderRadius.md,
+  },
+
+  // Magazine Layout
+  magazineContainer: {
+    marginBottom: spacing.md,
+  },
+  magazineSingleImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing.md,
+  },
+  magazineMainImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing.sm,
+  },
+  magazineThumbnails: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  magazineThumbnail: {
+    flex: 1,
+    height: 100,
+    borderRadius: borderRadius.md,
+  },
+
+  // Full Layout
+  fullContainer: {
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  fullImage: {
+    width: '100%',
+    height: 250,
+    borderRadius: borderRadius.lg,
+  },
+
+  // Framed Layout
+  framedContainer: {
+    gap: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  framedImageWrapper: {
+    padding: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
     elevation: 3,
   },
-  removeImageText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
-    lineHeight: 20,
+  framedImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: borderRadius.md,
   },
-  imageActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 24,
+
+  // Overlay Layout
+  overlayContainer: {
+    height: 300,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
   },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f0f0f0',
-    padding: 16,
-    borderRadius: 12,
-    gap: 8,
+  overlayBackground: {
+    width: '100%',
+    height: '100%',
   },
-  actionButtonIcon: {
-    fontSize: 24,
+  overlayDark: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '70%',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
+  overlayTextContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: spacing.lg,
+  },
+  overlayTitle: {
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.white,
+    marginBottom: spacing.sm,
+  },
+  overlayContent: {
+    fontSize: typography.fontSizes.md,
+    color: colors.white,
+    lineHeight: 22,
   },
 });

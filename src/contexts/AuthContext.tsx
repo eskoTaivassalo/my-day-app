@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
         if (savedUser && isMounted) {
-          console.log('Restored user from AsyncStorage');
+          // User restored
         }
       } catch (error) {
         console.error('Error restoring user:', error);
@@ -56,8 +56,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Listen to auth state changes
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!isMounted) return;
-
-      console.log('Auth state changed:', firebaseUser ? 'logged in' : 'logged out');
       
       setUser(firebaseUser);
       setLoading(false);
@@ -70,10 +68,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             email: firebaseUser.email,
             displayName: firebaseUser.displayName,
           }));
-          console.log('User saved to AsyncStorage');
         } else {
           await AsyncStorage.removeItem(AUTH_USER_KEY);
-          console.log('User removed from AsyncStorage');
         }
       } catch (error) {
         console.error('Error saving user to AsyncStorage:', error);
@@ -158,10 +154,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const userId = currentUser.uid;
-      console.log('Aloitetaan tilin poisto käyttäjälle:', userId);
 
       // 1. Poista kaikki diary_entries
-      console.log('Poistetaan päiväkirjamerkinnät...');
       const entriesQuery = query(
         collection(db, 'diary_entries'),
         where('userId', '==', userId)
@@ -171,10 +165,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         deleteDoc(doc(db, 'diary_entries', docSnap.id))
       );
       await Promise.all(entryDeletePromises);
-      console.log(`Poistettu ${entriesSnapshot.size} päiväkirjamerkintää`);
 
       // 2. Poista kaikki documents
-      console.log('Poistetaan dokumentit...');
       const documentsQuery = query(
         collection(db, 'documents'),
         where('userId', '==', userId)
@@ -184,19 +176,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         deleteDoc(doc(db, 'documents', docSnap.id))
       );
       await Promise.all(documentDeletePromises);
-      console.log(`Poistettu ${documentsSnapshot.size} dokumenttia`);
 
       // 3. Poista käyttäjän profiili users-kokoelmasta
-      console.log('Poistetaan käyttäjäprofiili...');
       try {
         await deleteDoc(doc(db, 'users', userId));
-        console.log('Käyttäjäprofiili poistettu');
       } catch (error) {
-        console.log('Ei käyttäjäprofiilia poistettavaksi');
+        // Ei käyttäjäprofiilia poistettavaksi
       }
 
       // 4. Poista kuvat Storage:sta
-      console.log('Poistetaan kuvat...');
       try {
         const userImagesRef = ref(storage, `images/${userId}`);
         const imagesList = await listAll(userImagesRef);
@@ -204,13 +192,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           deleteObject(itemRef)
         );
         await Promise.all(imageDeletePromises);
-        console.log(`Poistettu ${imagesList.items.length} kuvaa`);
       } catch (error) {
-        console.log('Ei kuvia poistettavaksi tai virhe:', error);
+        // Ei kuvia poistettavaksi
       }
 
       // 5. Poista dokumentit Storage:sta
-      console.log('Poistetaan tallennetut dokumentit...');
       try {
         const userDocsRef = ref(storage, `documents/${userId}`);
         const docsList = await listAll(userDocsRef);
@@ -218,15 +204,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           deleteObject(itemRef)
         );
         await Promise.all(docDeletePromises);
-        console.log(`Poistettu ${docsList.items.length} tiedostoa`);
       } catch (error) {
-        console.log('Ei tiedostoja poistettavaksi tai virhe:', error);
+        // Ei tiedostoja poistettavaksi
       }
 
       // 6. Poista käyttäjätili Authentication:sta
-      console.log('Poistetaan käyttäjätili...');
       await deleteUser(currentUser);
-      console.log('Käyttäjätili poistettu onnistuneesti');
 
       // 7. Tyhjennä AsyncStorage
       await AsyncStorage.removeItem(AUTH_USER_KEY);

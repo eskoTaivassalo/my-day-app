@@ -127,6 +127,7 @@ export const getEntries = async (userId: string): Promise<DiaryEntry[]> => {
         images: data.images || [],
         date: data.date.toDate(),
         location: data.location,
+        shared: data.shared || false,
         // Layout settings
         layout: data.layout,
         textPosition: data.textPosition,
@@ -173,6 +174,7 @@ export const getEntriesInRange = async (
         images: data.images || [],
         date: data.date.toDate(),
         location: data.location,
+        shared: data.shared || false,
         // Layout settings
         layout: data.layout,
         textPosition: data.textPosition,
