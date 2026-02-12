@@ -161,33 +161,6 @@ export const scheduleDailyReminders = async (settings: NotificationSettings): Pr
 };
 
 /**
- * Send immediate notification (for testing or instant reminders)
- */
-export const sendImmediateNotification = async (
-  title: string,
-  body: string,
-  data?: any
-): Promise<void> => {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        sound: true,
-        priority: Notifications.AndroidNotificationPriority.HIGH,
-        data: data || {},
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-        seconds: 1,
-      },
-    });
-  } catch (error) {
-    console.error('Error sending immediate notification:', error);
-  }
-};
-
-/**
  * Cancel all scheduled notifications
  */
 export const cancelAllNotifications = async (): Promise<void> => {
@@ -226,48 +199,5 @@ export const initializeNotifications = async (): Promise<void> => {
     }
   } catch (error) {
     console.error('Error initializing notifications:', error);
-  }
-};
-
-/**
- * Send celebration notification for achievements
- */
-export const sendAchievementNotification = async (
-  achievementName: string,
-  achievementDescription: string
-): Promise<void> => {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: `🎉 Saavutus avattu: ${achievementName}`,
-        body: achievementDescription,
-        sound: true,
-        priority: Notifications.AndroidNotificationPriority.HIGH,
-        data: { type: 'achievement' },
-      },
-      trigger: null, // Send immediately
-    });
-  } catch (error) {
-    console.error('Error sending achievement notification:', error);
-  }
-};
-
-/**
- * Send streak reminder notification
- */
-export const sendStreakReminderNotification = async (currentStreak: number): Promise<void> => {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: '🔥 Älä katkaise putkeasi!',
-        body: `Sinulla on ${currentStreak} päivän putki menossa. Kirjoita tänään merkintä jatkaaksesi!`,
-        sound: true,
-        priority: Notifications.AndroidNotificationPriority.HIGH,
-        data: { type: 'streak_reminder', streak: currentStreak },
-      },
-      trigger: null, // Send immediately
-    });
-  } catch (error) {
-    console.error('Error sending streak reminder:', error);
   }
 };

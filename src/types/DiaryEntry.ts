@@ -4,6 +4,7 @@ export interface DiaryEntry {
   title: string;
   content: string;
   images: string[]; // Array of image URIs
+  videos?: string[]; // Array of video URIs
   location?: {
     latitude: number;
     longitude: number;

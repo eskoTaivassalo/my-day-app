@@ -14,8 +14,9 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { Video, ResizeMode } from 'expo-av';
 import { useAuth } from '../contexts/AuthContext';
-import { createEntry, uploadImages } from '../services/diaryService';
+import { createEntry, uploadImages, uploadVideos } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography } from '../theme/theme';
 
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
@@ -26,6 +27,7 @@ export default function NewEntryScreen({ navigation }: any) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedVideos, setSelectedVideos] = useState<string[]>([]);
   const [layout, setLayout] = useState<LayoutType>('grid');
   const [saving, setSaving] = useState(false);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address?: string } | null>(null);
@@ -67,7 +69,7 @@ export default function NewEntryScreen({ navigation }: any) {
 
   const pickImageFromGallery = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       quality: 0.8,
     });
@@ -87,6 +89,7 @@ export default function NewEntryScreen({ navigation }: any) {
     }
 
     const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
       allowsEditing: true,
     });
@@ -98,6 +101,42 @@ export default function NewEntryScreen({ navigation }: any) {
 
   const removeSelectedImage = (uri: string) => {
     setSelectedImages(selectedImages.filter((img) => img !== uri));
+  };
+
+  const pickVideoFromGallery = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets) {
+      const newVideos = result.assets.map((asset) => asset.uri);
+      setSelectedVideos([...selectedVideos, ...newVideos]);
+    }
+  };
+
+  const recordVideo = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (status !== 'granted') {
+      Alert.alert('Lupa tarvitaan', 'Kameran käyttöoikeus tarvitaan videon tallentamiseen.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 1,
+      videoMaxDuration: 120,
+    });
+
+    if (!result.canceled && result.assets) {
+      setSelectedVideos([...selectedVideos, result.assets[0].uri]);
+    }
+  };
+
+  const removeSelectedVideo = (uri: string) => {
+    setSelectedVideos(selectedVideos.filter((video) => video !== uri));
   };
 
   const renderImages = () => {
@@ -186,6 +225,27 @@ export default function NewEntryScreen({ navigation }: any) {
     }
   };
 
+  const renderVideos = () => {
+    if (selectedVideos.length === 0) return null;
+
+    return (
+      <View style={previewStyles.videoContainer}>
+        {selectedVideos.map((uri, index) => (
+          <View key={index} style={previewStyles.videoWrapper}>
+            <Video
+              source={{ uri }}
+              style={previewStyles.video}
+              resizeMode={ResizeMode.COVER}
+              isMuted
+              shouldPlay={false}
+              useNativeControls
+            />
+          </View>
+        ))}
+      </View>
+    );
+  };
+
   const handleSave = async () => {
     if (!title.trim()) {
       Alert.alert('Puuttuva otsikko', 'Anna merkinnälle otsikko.');
@@ -210,12 +270,19 @@ export default function NewEntryScreen({ navigation }: any) {
         imageUrls = await uploadImages(selectedImages, user.uid);
       }
 
+      // Upload videos to Firebase Storage if any
+      let videoUrls: string[] = [];
+      if (selectedVideos.length > 0) {
+        videoUrls = await uploadVideos(selectedVideos, user.uid);
+      }
+
       // Save entry to Firestore with selected date
       await createEntry(
         {
           title: title.trim(),
           content: content.trim(),
           images: imageUrls,
+          videos: videoUrls,
           date: selectedDate,
           layout: layout,
           ...(location && { location }), // Lisää location vain jos se on olemassa
@@ -329,6 +396,9 @@ export default function NewEntryScreen({ navigation }: any) {
           {/* Images with layout */}
           {renderImages()}
 
+          {/* Videos */}
+          {renderVideos()}
+
           {/* Image Controls - Compact */}
           <View style={styles.imageControls}>
             <TouchableOpacity style={styles.compactButton} onPress={takePhoto}>
@@ -337,6 +407,14 @@ export default function NewEntryScreen({ navigation }: any) {
 
             <TouchableOpacity style={styles.compactButton} onPress={pickImageFromGallery}>
               <Text style={styles.compactButtonIcon}>🖼️</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.compactButton} onPress={recordVideo}>
+              <Text style={styles.compactButtonIcon}>🎥</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.compactButton} onPress={pickVideoFromGallery}>
+              <Text style={styles.compactButtonIcon}>📼</Text>
             </TouchableOpacity>
 
             {selectedImages.length > 0 && (
@@ -408,6 +486,31 @@ export default function NewEntryScreen({ navigation }: any) {
             </ScrollView>
           )}
 
+          {/* Selected Videos Thumbnails */}
+          {selectedVideos.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailScroll}>
+              <View style={styles.thumbnailContainer}>
+                {selectedVideos.map((uri, index) => (
+                  <View key={index} style={styles.thumbnailWrapper}>
+                    <Video
+                      source={{ uri }}
+                      style={styles.thumbnailVideo}
+                      resizeMode={ResizeMode.COVER}
+                      isMuted
+                      shouldPlay={false}
+                    />
+                    <TouchableOpacity
+                      style={styles.removeThumbnailButton}
+                      onPress={() => removeSelectedVideo(uri)}
+                    >
+                      <Text style={styles.removeThumbnailText}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          )}
+
           {/* Location - Inline */}
           {location ? (
             <View style={previewStyles.locationContainer}>
@@ -441,6 +544,12 @@ export default function NewEntryScreen({ navigation }: any) {
               <View style={previewStyles.stat}>
                 <Text style={previewStyles.statIcon}>📷</Text>
                 <Text style={previewStyles.statText}>{selectedImages.length}</Text>
+              </View>
+            )}
+            {selectedVideos.length > 0 && (
+              <View style={previewStyles.stat}>
+                <Text style={previewStyles.statIcon}>🎥</Text>
+                <Text style={previewStyles.statText}>{selectedVideos.length}</Text>
               </View>
             )}
           </View>
@@ -555,6 +664,12 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 8,
+  },
+  thumbnailVideo: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: '#000',
   },
   removeThumbnailButton: {
     position: 'absolute',
@@ -740,6 +855,21 @@ const previewStyles = StyleSheet.create({
   statText: {
     fontSize: typography.fontSizes.sm,
     color: colors.textSecondary,
+  },
+  videoContainer: {
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  videoWrapper: {
+    width: '100%',
+    height: 220,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.black,
+  },
+  video: {
+    width: '100%',
+    height: '100%',
   },
 
   // Grid Layout

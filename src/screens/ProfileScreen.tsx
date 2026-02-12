@@ -8,31 +8,19 @@ import {
   Alert,
   Image,
   ActivityIndicator,
-  Switch,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { getEntries, uploadProfileImage, updateUserProfile, getUserProfile } from '../services/diaryService';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
-import {
-  getNotificationSettings,
-  saveNotificationSettings,
-  scheduleDailyReminders,
-  requestNotificationPermissions,
-  NotificationSettings,
-} from '../services/notificationService';
+import { calculateStreaks } from '../utils/achievementUtils';
 
 export default function ProfileScreen({ navigation }: any) {
   const { user, logout, deleteAccount } = useAuth();
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
-    enabled: true,
-    dailyReminderTime: '20:00',
-    reminderDays: [0, 1, 2, 3, 4, 5, 6],
-  });
   const [stats, setStats] = useState({
     totalEntries: 0,
     totalImages: 0,
@@ -45,7 +33,6 @@ export default function ProfileScreen({ navigation }: any) {
     if (user) {
       loadStats();
       loadUserProfile();
-      loadNotificationSettings();
     }
   }, [user]);
 
@@ -62,44 +49,6 @@ export default function ProfileScreen({ navigation }: any) {
     }
   };
 
-  const loadNotificationSettings = async () => {
-    try {
-      const settings = await getNotificationSettings();
-      setNotificationSettings(settings);
-    } catch (error) {
-      console.error('Error loading notification settings:', error);
-    }
-  };
-
-  const toggleNotifications = async (enabled: boolean) => {
-    try {
-      if (enabled) {
-        const hasPermission = await requestNotificationPermissions();
-        if (!hasPermission) {
-          Alert.alert(
-            'Lupa vaaditaan',
-            'Ilmoitusten käyttö vaatii luvan. Voit myöntää luvan laitteen asetuksista.'
-          );
-          return;
-        }
-      }
-
-      const newSettings = { ...notificationSettings, enabled };
-      setNotificationSettings(newSettings);
-      await saveNotificationSettings(newSettings);
-      await scheduleDailyReminders(newSettings);
-
-      Alert.alert(
-        'Asetukset tallennettu',
-        enabled
-          ? `Päivittäinen muistutus ajastettu klo ${notificationSettings.dailyReminderTime}`
-          : 'Ilmoitukset poistettu käytöstä'
-      );
-    } catch (error) {
-      console.error('Error toggling notifications:', error);
-      Alert.alert('Virhe', 'Ilmoitusasetusten päivitys epäonnistui');
-    }
-  };
 
   const loadStats = async () => {
     if (!user) return;
@@ -125,67 +74,6 @@ export default function ProfileScreen({ navigation }: any) {
     } catch (error) {
       console.error('Error loading stats:', error);
     }
-  };
-
-  const calculateStreaks = (entries: DiaryEntry[]) => {
-    if (entries.length === 0) return { current: 0, longest: 0 };
-
-    // Sort entries by date
-    const sortedEntries = [...entries].sort((a, b) => 
-      new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-
-    let currentStreak = 0;
-    let longestStreak = 0;
-    let tempStreak = 1;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Check current streak
-    const latestEntry = new Date(sortedEntries[0].date);
-    latestEntry.setHours(0, 0, 0, 0);
-    const daysSinceLatest = Math.floor((today.getTime() - latestEntry.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (daysSinceLatest <= 1) {
-      currentStreak = 1;
-      
-      // Continue counting streak
-      for (let i = 1; i < sortedEntries.length; i++) {
-        const current = new Date(sortedEntries[i - 1].date);
-        const previous = new Date(sortedEntries[i].date);
-        current.setHours(0, 0, 0, 0);
-        previous.setHours(0, 0, 0, 0);
-        
-        const diff = Math.floor((current.getTime() - previous.getTime()) / (1000 * 60 * 60 * 24));
-        
-        if (diff === 1) {
-          currentStreak++;
-        } else {
-          break;
-        }
-      }
-    }
-
-    // Calculate longest streak
-    for (let i = 1; i < sortedEntries.length; i++) {
-      const current = new Date(sortedEntries[i - 1].date);
-      const previous = new Date(sortedEntries[i].date);
-      current.setHours(0, 0, 0, 0);
-      previous.setHours(0, 0, 0, 0);
-      
-      const diff = Math.floor((current.getTime() - previous.getTime()) / (1000 * 60 * 60 * 24));
-      
-      if (diff === 1) {
-        tempStreak++;
-        longestStreak = Math.max(longestStreak, tempStreak);
-      } else {
-        tempStreak = 1;
-      }
-    }
-    
-    longestStreak = Math.max(longestStreak, currentStreak, 1);
-
-    return { current: currentStreak, longest: longestStreak };
   };
 
   const handleLogout = () => {
@@ -394,31 +282,28 @@ export default function ProfileScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
 
+        {/* Asetukset-linkki */}
+        <View style={styles.settingsContainer}>
+          <TouchableOpacity
+            style={styles.achievementsButton}
+            onPress={() => navigation.navigate('Settings')}
+          >
+            <View style={styles.achievementsButtonContent}>
+              <Text style={styles.achievementsButtonIcon}>⚙️</Text>
+              <View style={styles.achievementsButtonTextContainer}>
+                <Text style={styles.achievementsButtonTitle}>Asetukset</Text>
+                <Text style={styles.achievementsButtonSubtitle}>
+                  Hallitse sovelluksen asetuksia
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.achievementsButtonArrow}>›</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Asetukset */}
         <View style={styles.settingsContainer}>
           <Text style={styles.sectionTitle}>Asetukset</Text>
-          
-          <View style={styles.settingCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingIcon}>🔔</Text>
-                <View>
-                  <Text style={styles.settingTitle}>Päivittäiset muistutukset</Text>
-                  <Text style={styles.settingDescription}>
-                    {notificationSettings.enabled
-                      ? `Klo ${notificationSettings.dailyReminderTime}`
-                      : 'Ei käytössä'}
-                  </Text>
-                </View>
-              </View>
-              <Switch
-                value={notificationSettings.enabled}
-                onValueChange={toggleNotifications}
-                trackColor={{ false: colors.borderLight, true: colors.primary }}
-                thumbColor={colors.white}
-              />
-            </View>
-          </View>
         </View>
 
         {/* Actions */}

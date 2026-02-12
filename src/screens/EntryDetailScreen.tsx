@@ -19,8 +19,9 @@ import * as Location from 'expo-location';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import ViewShot from 'react-native-view-shot';
+import { Video,ResizeMode } from 'expo-av';
 import { DiaryEntry } from '../types/DiaryEntry';
-import { updateEntry, deleteEntry, uploadImages } from '../services/diaryService';
+import { updateEntry, deleteEntry, uploadImages, uploadVideos } from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
 
@@ -54,6 +55,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   const [editedTitle, setEditedTitle] = useState(entry.title);
   const [editedContent, setEditedContent] = useState(entry.content);
   const [editedImages, setEditedImages] = useState<string[]>(entry.images);
+  const [editedVideos, setEditedVideos] = useState<string[]>(entry.videos || []);
   const [editedDate, setEditedDate] = useState(entry.date);
   const [editedLocation, setEditedLocation] = useState(entry.location || null);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -126,6 +128,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         title: editedTitle.trim(),
         content: editedContent.trim(),
         images: editedImages,
+        videos: editedVideos,
         layout: layout,
         date: editedDate,
         ...(editedLocation && { location: editedLocation }),
@@ -136,6 +139,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         title: editedTitle.trim(),
         content: editedContent.trim(),
         images: editedImages,
+        videos: editedVideos,
         layout: layout,
         date: editedDate,
         location: editedLocation || undefined,
@@ -155,6 +159,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     setEditedTitle(entry.title);
     setEditedContent(entry.content);
     setEditedImages(entry.images);
+    setEditedVideos(entry.videos || []);
     setEditedDate(entry.date);
     setEditedLocation(entry.location || null);
     setIsEditing(false);
@@ -230,7 +235,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       quality: 0.8,
     });
@@ -251,6 +256,58 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const removeImage = (uri: string) => {
     setEditedImages(editedImages.filter((img) => img !== uri));
+  };
+
+  const pickVideo = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && user) {
+      setSaving(true);
+      try {
+        const newVideoUris = result.assets.map((asset) => asset.uri);
+        const uploadedUrls = await uploadVideos(newVideoUris, user.uid);
+        setEditedVideos([...editedVideos, ...uploadedUrls]);
+      } catch (error) {
+        Alert.alert('Virhe', 'Videoiden lataus epäonnistui');
+      } finally {
+        setSaving(false);
+      }
+    }
+  };
+
+  const recordVideo = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (status !== 'granted') {
+      Alert.alert('Lupa tarvitaan', 'Kameran käyttöoikeus tarvitaan videon tallentamiseen.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 1,
+      videoMaxDuration: 120,
+    });
+
+    if (!result.canceled && result.assets && user) {
+      setSaving(true);
+      try {
+        const uploadedUrls = await uploadVideos([result.assets[0].uri], user.uid);
+        setEditedVideos([...editedVideos, ...uploadedUrls]);
+      } catch (error) {
+        Alert.alert('Virhe', 'Videon lataus epäonnistui');
+      } finally {
+        setSaving(false);
+      }
+    }
+  };
+
+  const removeVideo = (uri: string) => {
+    setEditedVideos(editedVideos.filter((video) => video !== uri));
   };
   const handleImagePress = (uri: string) => {
     if (!isEditing) {
@@ -518,7 +575,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                     onPress={() => handleImagePress(uri)}
                     activeOpacity={0.9}
                   >
-                    <Image source={{ uri }} style={styles.overlayThumbnailImage} resizeMode="cover" />
+                    <Image source={{ uri }} style={styles.overlayThumbnailImage} resizeMode={ResizeMode.COVER} />
                     {isEditing && (
                       <TouchableOpacity
                         style={styles.removeImageButton}
@@ -537,6 +594,35 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       default:
         return null;
     }
+  };
+
+  const renderVideos = () => {
+    const videos = isEditing ? editedVideos : (entry.videos || []);
+    if (videos.length === 0) return null;
+
+    return (
+      <View style={styles.videoSection}>
+        {videos.map((uri, index) => (
+          <View key={index} style={styles.videoWrapper}>
+            <Video
+              source={{ uri }}
+              style={styles.videoPlayer}
+              resizeMode={ResizeMode.COVER}
+              useNativeControls
+              isMuted
+            />
+            {isEditing && (
+              <TouchableOpacity
+                style={styles.removeVideoButton}
+                onPress={() => removeVideo(uri)}
+              >
+                <Text style={styles.removeImageText}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
+      </View>
+    );
   };
 
   return (
@@ -695,11 +781,22 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           {/* Images */}
           {renderImages()}
 
+          {/* Videos */}
+          {renderVideos()}
+
           {/* Add Image Button */}
           {isEditing && (
-            <TouchableOpacity style={styles.addImageButton} onPress={pickImage}>
-              <Text style={styles.addImageText}>+ Lisää kuvia</Text>
-            </TouchableOpacity>
+            <View style={styles.mediaButtonsRow}>
+              <TouchableOpacity style={styles.addImageButton} onPress={pickImage}>
+                <Text style={styles.addImageText}>+ Lisää kuvia</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.addVideoButton} onPress={pickVideo}>
+                <Text style={styles.addVideoText}>+ Lisää videoita</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.addVideoButton} onPress={recordVideo}>
+                <Text style={styles.addVideoText}>🎥 Kuvaa video</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
         {/* Metadata */}
@@ -1212,12 +1309,55 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: colors.gray200,
     alignItems: 'center',
-    marginBottom: spacing.lg,
   },
   addImageText: {
     fontSize: typography.fontSizes.md,
     color: colors.primary,
     fontWeight: typography.fontWeights.semibold,
+  },
+  mediaButtonsRow: {
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  addVideoButton: {
+    padding: spacing.lg,
+    backgroundColor: colors.gray50,
+    borderRadius: borderRadius.lg,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: colors.gray200,
+    alignItems: 'center',
+  },
+  addVideoText: {
+    fontSize: typography.fontSizes.md,
+    color: colors.primary,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  videoSection: {
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  videoWrapper: {
+    width: '100%',
+    height: 220,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.black,
+  },
+  videoPlayer: {
+    width: '100%',
+    height: '100%',
+  },
+  removeVideoButton: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.full,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   content: {
     fontSize: typography.fontSizes.lg,

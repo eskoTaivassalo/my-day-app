@@ -19,15 +19,21 @@ import { useAuth } from '../contexts/AuthContext';
 import { getEntries, getUserProfile } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 import AchievementToast from '../components/AchievementToast';
-import { sendAchievementNotification } from '../services/notificationService';
+import ReminderToast from '../components/ReminderToast';
+import {
+  getLastReminderAlertDate,
+  getTodayDateKey,
+  getTodayRemindersSummary,
+  getShowTodayRemindersAlert,
+  setLastReminderAlertDate,
+} from '../services/reminderService';
 import {
   getUnlockedAchievementIds,
   addUnlockedAchievement,
 } from '../services/achievementStorageService';
 import {
+  achievements,
   calculateStats,
-  getNextAchievement,
-  getProgressToNext,
   checkNewAchievements,
   Achievement,
   Stats,
@@ -59,6 +65,8 @@ export default function TimelineScreen({ navigation }: any) {
   });
   const [achievementToast, setAchievementToast] = useState<Achievement | null>(null);
   const [showToast, setShowToast] = useState(false);
+  const [showReminderToast, setShowReminderToast] = useState(false);
+  const [reminderToastMessage, setReminderToastMessage] = useState('');
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
   const { user } = useAuth();
   
@@ -82,7 +90,7 @@ export default function TimelineScreen({ navigation }: any) {
       // Ladataan saavutukset ENSIN, sitten vasta entries
       // Näin unlockedAchievementIds on päivitetty ennen saavutusten tarkistusta
       loadUnlockedAchievements().then((ids) => {
-        loadEntries(ids);
+        loadEntries(ids).then(() => maybeShowTodayReminders({ ignoreLastShown: true }));
       });
       loadUserProfile();
     }
@@ -94,7 +102,7 @@ export default function TimelineScreen({ navigation }: any) {
       if (user) {
         // Lataa saavutukset ensin, sitten entries
         loadUnlockedAchievements().then((ids) => {
-          loadEntries(ids);
+          loadEntries(ids).then(() => maybeShowTodayReminders({ ignoreLastShown: true }));
         });
         loadUserProfile();
       }
@@ -174,17 +182,12 @@ export default function TimelineScreen({ navigation }: any) {
         setAchievementToast(newAchievements[0]);
         setShowToast(true);
         
-        // Send notification for first achievement
-        sendAchievementNotification(newAchievements[0].name, newAchievements[0].description);
-        
         // If there are multiple achievements, show them one by one
         if (newAchievements.length > 1) {
           for (let i = 1; i < Math.min(3, newAchievements.length); i++) {
             setTimeout(() => {
               setAchievementToast(newAchievements[i]);
               setShowToast(true);
-              // Send notification for additional achievements
-              sendAchievementNotification(newAchievements[i].name, newAchievements[i].description);
             }, i * 5500); // 5.5 second delay between each toast
           }
         }
@@ -202,7 +205,77 @@ export default function TimelineScreen({ navigation }: any) {
     setRefreshing(true);
     const ids = await loadUnlockedAchievements();
     await loadEntries(ids);
+    await maybeShowTodayReminders({ ignoreLastShown: true });
     setRefreshing(false);
+  };
+
+  const maybeShowTodayReminders = async (options?: { ignoreLastShown?: boolean }) => {
+    const showEnabled = await getShowTodayRemindersAlert();
+    if (!showEnabled) {
+      return;
+    }
+
+    const todayKey = getTodayDateKey();
+    const lastShown = await getLastReminderAlertDate();
+
+    if (!options?.ignoreLastShown && lastShown === todayKey) {
+      return;
+    }
+
+    const summary = await getTodayRemindersSummary();
+
+    if (!summary) {
+      return;
+    }
+
+    setReminderToastMessage(summary.message);
+    setShowReminderToast(true);
+    await setLastReminderAlertDate(summary.dateKey);
+  };
+
+  const getAchievementProgress = (achievement: Achievement) => {
+    let current = 0;
+
+    switch (achievement.type) {
+      case 'streak':
+        current = stats.currentStreak;
+        break;
+      case 'entries':
+        current = stats.totalEntries;
+        break;
+      case 'images':
+        current = stats.totalImages;
+        break;
+      case 'words':
+        current = stats.totalWords;
+        break;
+      case 'multiDay':
+        current = stats.multiDayCount;
+        break;
+      case 'shared':
+        current = stats.sharedCount;
+        break;
+      case 'location':
+        current = stats.entriesWithLocation;
+        break;
+      case 'earlyBird':
+        current = stats.earlyBirdCount;
+        break;
+      case 'nightOwl':
+        current = stats.nightOwlCount;
+        break;
+      case 'weekend':
+        current = stats.weekendCount;
+        break;
+      case 'photoCollection':
+        current = stats.maxImagesInEntry;
+        break;
+    }
+
+    const target = achievement.requirement;
+    const progress = Math.min((current / target) * 100, 100);
+
+    return { current, target, progress };
   };
 
   const formatDate = (date: Date) => {
@@ -460,6 +533,12 @@ export default function TimelineScreen({ navigation }: any) {
                   <Text style={styles.statText}>{item.images.length}</Text>
                 </View>
               )}
+              {item.videos && item.videos.length > 0 && (
+                <View style={styles.stat}>
+                  <Text style={styles.statIcon}>🎥</Text>
+                  <Text style={styles.statText}>{item.videos.length}</Text>
+                </View>
+              )}
             </View>
           </View>
         </TouchableOpacity>
@@ -528,6 +607,12 @@ export default function TimelineScreen({ navigation }: any) {
                 <Text style={styles.statText}>{item.images.length}</Text>
               </View>
             )}
+            {item.videos && item.videos.length > 0 && (
+              <View style={styles.stat}>
+                <Text style={styles.statIcon}>🎥</Text>
+                <Text style={styles.statText}>{item.videos.length}</Text>
+              </View>
+            )}
           </View>
         </View>
       </TouchableOpacity>
@@ -547,6 +632,13 @@ export default function TimelineScreen({ navigation }: any) {
         }}
       />
 
+      <ReminderToast
+        title="Tämän päivän muistutukset"
+        message={reminderToastMessage}
+        visible={showReminderToast}
+        onHide={() => setShowReminderToast(false)}
+      />
+
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
@@ -563,6 +655,13 @@ export default function TimelineScreen({ navigation }: any) {
             }}
           >
             <Text style={styles.searchIconText}>🔍</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.reminderButton}
+            onPress={() => navigation.navigate('Reminders')}
+          >
+            <Text style={styles.reminderIconText}>⏰</Text>
           </TouchableOpacity>
           
           <TouchableOpacity
@@ -603,61 +702,67 @@ export default function TimelineScreen({ navigation }: any) {
       </View>
 
       {/* Achievements Section - Horizontal Scroll */}
-      {(() => {
-        const nextAchievement = getNextAchievement(stats);
-        const progress = getProgressToNext(stats);
-        
-        return (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.achievementsScroll}
-            style={styles.achievementsContainer}
-          >
-            {/* Current Streak Card */}
-            <View style={styles.achievementCard}>
-              <Text style={styles.achievementCardIcon}>🔥</Text>
-              <Text style={styles.achievementCardValue}>{stats.currentStreak}</Text>
-              <Text style={styles.achievementCardLabel}>päivän putki</Text>
-            </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.achievementsScroll}
+        style={styles.achievementsContainer}
+      >
+        {achievements.map((achievement) => {
+          const isUnlocked = unlockedAchievementIds.includes(achievement.id);
+          const progress = getAchievementProgress(achievement);
 
-            {/* Next Achievement Card */}
-            {nextAchievement && (
-              <View style={[styles.achievementCard, styles.nextAchievementCardCompact]}>
-                <Text style={styles.achievementCardIcon}>{nextAchievement.icon}</Text>
-                <Text style={styles.achievementCardTitle} numberOfLines={1}>
-                  {nextAchievement.name}
-                </Text>
-                <View style={styles.progressBarContainerCompact}>
-                  <View style={[styles.progressBarCompact, { width: `${progress.progress}%` }]} />
-                </View>
-                <Text style={styles.achievementCardProgress}>
-                  {progress.current} / {progress.target}
-                </Text>
+          return (
+            <View
+              key={achievement.id}
+              style={[
+                styles.achievementCard,
+                !isUnlocked && styles.achievementCardLocked,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.achievementCardIcon,
+                  !isUnlocked && styles.achievementCardIconLocked,
+                ]}
+              >
+                {achievement.icon}
+              </Text>
+              <Text
+                style={[
+                  styles.achievementCardTitle,
+                  !isUnlocked && styles.achievementCardTitleLocked,
+                ]}
+                numberOfLines={2}
+              >
+                {achievement.name}
+              </Text>
+              <View style={styles.progressBarContainerCompact}>
+                <View
+                  style={[
+                    styles.progressBarCompact,
+                    { width: `${progress.progress}%` },
+                    !isUnlocked && styles.progressBarCompactLocked,
+                  ]}
+                />
               </View>
-            )}
-
-            {/* Stats Cards */}
-            <View style={styles.achievementCard}>
-              <Text style={styles.achievementCardIcon}>📝</Text>
-              <Text style={styles.achievementCardValue}>{stats.totalEntries}</Text>
-              <Text style={styles.achievementCardLabel}>merkintää</Text>
+              <Text
+                style={[
+                  styles.achievementCardProgress,
+                  !isUnlocked && styles.achievementCardProgressLocked,
+                ]}
+              >
+                {Math.min(progress.current, progress.target)} / {progress.target}
+              </Text>
+              {isUnlocked && (
+                <View style={styles.achievementUnlockedBadge}>
+                  <Text style={styles.achievementUnlockedText}>✓</Text>
+                </View>
+              )}
             </View>
-
-            <View style={styles.achievementCard}>
-              <Text style={styles.achievementCardIcon}>📷</Text>
-              <Text style={styles.achievementCardValue}>{stats.totalImages}</Text>
-              <Text style={styles.achievementCardLabel}>kuvaa</Text>
-            </View>
-
-            <View style={styles.achievementCard}>
-              <Text style={styles.achievementCardIcon}>🏆</Text>
-              <Text style={styles.achievementCardValue}>{stats.longestStreak}</Text>
-              <Text style={styles.achievementCardLabel}>pisin putki</Text>
-            </View>
-          </ScrollView>
-        );
-      })()}
+          );
+        })}
+      </ScrollView>
 
       {/* Entries List */}
       <FlatList
@@ -749,6 +854,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: spacing.sm,
   },
+  reminderButton: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.sm,
+  },
+  reminderIconText: {
+    fontSize: 20,
+  },
   searchIconText: {
     fontSize: 20,
   },
@@ -799,20 +916,27 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   achievementCard: {
-    width: 105,
+    width: 118,
     height: 100,
     backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
-    padding: spacing.md,
+    padding: spacing.sm,
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.sm,
     borderWidth: 1,
     borderColor: colors.gray100,
   },
+  achievementCardLocked: {
+    backgroundColor: colors.gray50,
+    borderColor: colors.gray200,
+  },
   achievementCardIcon: {
-    fontSize: 28,
+    fontSize: 24,
     marginBottom: spacing.xs,
+  },
+  achievementCardIconLocked: {
+    opacity: 0.5,
   },
   achievementCardValue: {
     fontSize: typography.fontSizes.xxl,
@@ -824,16 +948,15 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     textAlign: 'center',
   },
-  nextAchievementCardCompact: {
-    width: 135,
-    height: 100,
-  },
   achievementCardTitle: {
-    fontSize: typography.fontSizes.sm,
+    fontSize: typography.fontSizes.xs,
     fontWeight: typography.fontWeights.semibold,
     color: colors.text,
     textAlign: 'center',
     marginBottom: spacing.xs,
+  },
+  achievementCardTitleLocked: {
+    color: colors.textSecondary,
   },
   progressBarContainerCompact: {
     width: '100%',
@@ -848,9 +971,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderRadius: borderRadius.full,
   },
+  progressBarCompactLocked: {
+    backgroundColor: colors.gray400,
+  },
   achievementCardProgress: {
-    fontSize: typography.fontSizes.xs,
+    fontSize: typography.fontSizes.xs - 1,
     color: colors.textSecondary,
+  },
+  achievementCardProgressLocked: {
+    color: colors.textSecondary,
+  },
+  achievementUnlockedBadge: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 18,
+    height: 18,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  achievementUnlockedText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.xs - 2,
+    fontWeight: typography.fontWeights.bold,
   },
   listContent: {
     padding: spacing.md,

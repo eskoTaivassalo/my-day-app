@@ -1,9 +1,10 @@
-import React, { useEffect } from 'react';
-import { Text, ActivityIndicator, View, LogBox } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Text, ActivityIndicator, View, LogBox, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { initializeNotifications } from './src/services/notificationService';
 
 // Ignore Firebase AsyncStorage warning
@@ -27,6 +28,10 @@ import NewEntryScreen from './src/screens/NewEntryScreen';
 import EntryDetailScreen from './src/screens/EntryDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AchievementsScreen from './src/screens/AchievementsScreen';
+import RemindersScreen from './src/screens/RemindersScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
+import ImageLibraryScreen from './src/screens/ImageLibraryScreen';
+import VideoLibraryScreen from './src/screens/VideoLibraryScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -140,6 +145,34 @@ function AppNavigator() {
         }}
       />
       <Stack.Screen
+        name="Reminders"
+        component={RemindersScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="ImageLibrary"
+        component={ImageLibraryScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="VideoLibrary"
+        component={VideoLibraryScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="DocumentDetail"
         component={DocumentDetailScreen}
         options={{
@@ -153,6 +186,7 @@ function AppNavigator() {
 // Root navigator with auth check
 function RootNavigator() {
   const { user, loading } = useAuth();
+  const notificationListener = useRef<Notifications.Subscription | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -160,6 +194,24 @@ function RootNavigator() {
       initializeNotifications();
     }
   }, [user]);
+
+
+  useEffect(() => {
+    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
+      const type = notification.request.content.data?.type;
+
+      if (type === 'reminder') {
+        Alert.alert('⏰ Muistutus', notification.request.content.body || 'Muistutus');
+      }
+    });
+
+    return () => {
+      if (notificationListener.current) {
+        notificationListener.current.remove();
+      }
+    };
+  }, []);
+
 
   if (loading) {
     return (

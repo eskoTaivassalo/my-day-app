@@ -49,6 +49,35 @@ export const uploadImages = async (uris: string[], userId: string): Promise<stri
 };
 
 /**
+ * Upload a video to Firebase Storage
+ */
+export const uploadVideo = async (uri: string, userId: string): Promise<string> => {
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+
+    const filename = `${userId}/${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
+    const storageRef = ref(storage, `videos/${filename}`);
+
+    await uploadBytes(storageRef, blob);
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    return downloadUrl;
+  } catch (error) {
+    console.error('Error uploading video:', error);
+    throw error;
+  }
+};
+
+/**
+ * Upload multiple videos to Firebase Storage
+ */
+export const uploadVideos = async (uris: string[], userId: string): Promise<string[]> => {
+  const uploadPromises = uris.map((uri) => uploadVideo(uri, userId));
+  return Promise.all(uploadPromises);
+};
+
+/**
  * Create a new diary entry
  */
 export const createEntry = async (
@@ -61,6 +90,7 @@ export const createEntry = async (
       ...entry,
       userId,
       date: Timestamp.fromDate(entry.date),
+      videos: entry.videos || [],
       createdAt: now,
       updatedAt: now,
     });
@@ -125,6 +155,7 @@ export const getEntries = async (userId: string): Promise<DiaryEntry[]> => {
         title: data.title,
         content: data.content,
         images: data.images || [],
+        videos: data.videos || [],
         date: data.date.toDate(),
         location: data.location,
         shared: data.shared || false,
@@ -172,6 +203,7 @@ export const getEntriesInRange = async (
         title: data.title,
         content: data.content,
         images: data.images || [],
+        videos: data.videos || [],
         date: data.date.toDate(),
         location: data.location,
         shared: data.shared || false,
