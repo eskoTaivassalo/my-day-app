@@ -31,6 +31,7 @@ import {
   getUnlockedAchievementIds,
   addUnlockedAchievement,
 } from '../services/achievementStorageService';
+import { Video, ResizeMode } from 'expo-av';
 import {
   achievements,
   calculateStats,
@@ -68,6 +69,7 @@ export default function TimelineScreen({ navigation }: any) {
   const [showReminderToast, setShowReminderToast] = useState(false);
   const [reminderToastMessage, setReminderToastMessage] = useState('');
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
+  const [visibleEntryIds, setVisibleEntryIds] = useState<Set<string>>(new Set());
   const { user } = useAuth();
   
   // Muista viimeiset tilastot joista näytettiin toast
@@ -300,6 +302,15 @@ export default function TimelineScreen({ navigation }: any) {
     return formatDate(date);
   };
 
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: DiaryEntry }> }) => {
+    const ids = new Set(viewableItems.map((viewable) => viewable.item?.id).filter(Boolean));
+    setVisibleEntryIds(ids as Set<string>);
+  }).current;
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 35,
+  }).current;
+
   const renderImages = (images: string[], layout: LayoutType = 'grid', title?: string, content?: string) => {
     if (images.length === 0) return null;
 
@@ -417,6 +428,43 @@ export default function TimelineScreen({ navigation }: any) {
   };
 
   const renderEntry = ({ item }: { item: DiaryEntry }) => {
+    const renderVideoPreview = () => {
+      if (!item.videos || item.videos.length === 0) return null;
+
+      const shouldRenderVideo = visibleEntryIds.has(item.id);
+
+      return (
+        <View style={styles.timelineVideoPreviewContainer}>
+          <View style={styles.timelineVideoPreviewCard}>
+            {shouldRenderVideo ? (
+              <Video
+                source={{ uri: item.videos[0] }}
+                style={styles.timelineVideoPreviewPlayer}
+                resizeMode={ResizeMode.COVER}
+                shouldPlay={false}
+                isLooping={false}
+                useNativeControls={false}
+              />
+            ) : (
+              <View style={styles.timelineVideoPlaceholder}>
+                <Text style={styles.timelineVideoPlaceholderIcon}>🎥</Text>
+              </View>
+            )}
+
+            <View style={styles.timelineVideoBadge}>
+              <Text style={styles.timelineVideoBadgeText}>Video</Text>
+            </View>
+
+            {item.videos.length > 1 && (
+              <View style={styles.timelineVideoCountBadge}>
+                <Text style={styles.timelineVideoCountText}>+{item.videos.length - 1}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    };
+
     // Text Overlay Mode
     if (item.textOverlay && item.images.length > 0) {
       return (
@@ -471,6 +519,8 @@ export default function TimelineScreen({ navigation }: any) {
                   {item.content}
                 </Text>
 
+                {renderVideoPreview()}
+
                 <View style={styles.entryFooter}>
                   {item.location && (
                     <View style={styles.locationContainer}>
@@ -515,6 +565,8 @@ export default function TimelineScreen({ navigation }: any) {
         >
           {/* Only render images with overlay - no separate title/content */}
           {renderImages(item.images, item.layout, item.title, item.content)}
+
+          {renderVideoPreview()}
 
           {/* Entry Footer */}
           <View style={styles.entryFooter}>
@@ -589,6 +641,8 @@ export default function TimelineScreen({ navigation }: any) {
 
         {/* Images with layout */}
         {item.images.length > 0 && renderImages(item.images, item.layout || 'grid', item.title, item.content)}
+
+        {renderVideoPreview()}
 
         {/* Entry Footer */}
         <View style={styles.entryFooter}>
@@ -769,6 +823,9 @@ export default function TimelineScreen({ navigation }: any) {
         data={filteredEntries}
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        removeClippedSubviews
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl 
@@ -1369,6 +1426,59 @@ const styles = StyleSheet.create({
   timelineOverlayBadgeText: {
     color: colors.white,
     fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+  },
+
+  timelineVideoPreviewContainer: {
+    marginBottom: spacing.md,
+  },
+  timelineVideoPreviewCard: {
+    height: 190,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    backgroundColor: colors.gray100,
+    position: 'relative',
+  },
+  timelineVideoPreviewPlayer: {
+    width: '100%',
+    height: '100%',
+  },
+  timelineVideoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.gray100,
+  },
+  timelineVideoPlaceholderIcon: {
+    fontSize: 38,
+  },
+  timelineVideoBadge: {
+    position: 'absolute',
+    left: spacing.sm,
+    bottom: spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+  },
+  timelineVideoBadgeText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.xs,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  timelineVideoCountBadge: {
+    position: 'absolute',
+    right: spacing.sm,
+    top: spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+  },
+  timelineVideoCountText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.xs,
     fontWeight: typography.fontWeights.semibold,
   },
 });
