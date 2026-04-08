@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Modal,
   Pressable,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,7 +22,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import ViewShot from 'react-native-view-shot';
 import { Video,ResizeMode } from 'expo-av';
 import { DiaryEntry } from '../types/DiaryEntry';
-import { updateEntry, deleteEntry, uploadImages, uploadVideos } from '../services/diaryService';
+import { updateEntry, deleteEntry, uploadImages, uploadVideos, resolveEntryMediaUris } from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
 
@@ -56,17 +57,67 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   const [editedContent, setEditedContent] = useState(entry.content);
   const [editedImages, setEditedImages] = useState<string[]>(entry.images);
   const [editedVideos, setEditedVideos] = useState<string[]>(entry.videos || []);
+  const [editedVideoThumbnails, setEditedVideoThumbnails] = useState<Record<string, string>>(entry.videoThumbnails || {});
   const [editedDate, setEditedDate] = useState(entry.date);
   const [editedLocation, setEditedLocation] = useState(entry.location || null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [layout, setLayout] = useState<LayoutType>(entry.layout || 'grid');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [showLayoutSelector, setShowLayoutSelector] = useState(false);
   const [tempLayout, setTempLayout] = useState<LayoutType>(entry.layout || 'grid');
+  const [mediaResolving, setMediaResolving] = useState(false);
+  const [videoResolveError, setVideoResolveError] = useState<string | null>(null);
+  const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
   const viewShotRef = useRef<ViewShot>(null);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const resolveMedia = async () => {
+      try {
+        const hasEncryptedMedia =
+          (entry.images || []).some((uri) => /\.enc(\?|$)/.test(uri)) ||
+          (entry.videos || []).some((uri) => /\.enc(\?|$)/.test(uri));
+
+        if (!hasEncryptedMedia) {
+          return;
+        }
+
+        setMediaResolving(true);
+        setVideoResolveError(null);
+        const resolvedEntry = await resolveEntryMediaUris(entry);
+        if (!isMounted) return;
+
+        const unresolvedVideos = (resolvedEntry.videos || []).filter((uri) => /\.enc(\?|$)/.test(uri));
+        if (unresolvedVideos.length > 0) {
+          setVideoResolveError('Videon purku epäonnistui. Kokeile avata merkintä uudelleen.');
+        }
+
+        setEntry(resolvedEntry);
+        if (!isEditing) {
+          setEditedImages(resolvedEntry.images || []);
+          setEditedVideos(resolvedEntry.videos || []);
+        }
+      } catch (error) {
+        console.error('Error resolving entry media:', error);
+      } finally {
+        if (isMounted) {
+          setMediaResolving(false);
+        }
+      }
+    };
+
+    resolveMedia();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [entry.id]);
 
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleDateString('fi-FI', {
@@ -129,6 +180,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         content: editedContent.trim(),
         images: editedImages,
         videos: editedVideos,
+        videoThumbnails: editedVideoThumbnails,
         layout: layout,
         date: editedDate,
         ...(editedLocation && { location: editedLocation }),
@@ -140,6 +192,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         content: editedContent.trim(),
         images: editedImages,
         videos: editedVideos,
+        videoThumbnails: editedVideoThumbnails,
         layout: layout,
         date: editedDate,
         location: editedLocation || undefined,
@@ -160,6 +213,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     setEditedContent(entry.content);
     setEditedImages(entry.images);
     setEditedVideos(entry.videos || []);
+    setEditedVideoThumbnails(entry.videoThumbnails || {});
     setEditedDate(entry.date);
     setEditedLocation(entry.location || null);
     setIsEditing(false);
@@ -218,11 +272,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         
         // Merkitse merkintä jaetuksi (shareAsync palauttaa aina, vaikka käyttäjä peruisi)
         if (user && !entry.shared) {
-          console.log('Marking entry as shared:', entry.id);
           await updateEntry(entry.id, { shared: true });
           const updatedEntry = { ...entry, shared: true };
           setEntry(updatedEntry);
-          console.log('Entry marked as shared successfully');
         }
       } else {
         Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
@@ -267,14 +319,26 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
     if (!result.canceled && result.assets && user) {
       setSaving(true);
+      setUploadProgress(0);
       try {
         const newVideoUris = result.assets.map((asset) => asset.uri);
-        const uploadedUrls = await uploadVideos(newVideoUris, user.uid);
+        const uploadedAssets = await uploadVideos(newVideoUris, user.uid, (progress) => {
+          setUploadProgress(progress);
+        });
+        const uploadedUrls = uploadedAssets.map((asset) => asset.videoUrl);
+        const thumbnailUpdates = uploadedAssets.reduce((acc, asset) => {
+          if (asset.thumbnailUrl) {
+            acc[asset.videoUrl] = asset.thumbnailUrl;
+          }
+          return acc;
+        }, {} as Record<string, string>);
         setEditedVideos([...editedVideos, ...uploadedUrls]);
+        setEditedVideoThumbnails((prev) => ({ ...prev, ...thumbnailUpdates }));
       } catch (error) {
         Alert.alert('Virhe', 'Videoiden lataus epäonnistui');
       } finally {
         setSaving(false);
+        setUploadProgress(null);
       }
     }
   };
@@ -295,13 +359,25 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
     if (!result.canceled && result.assets && user) {
       setSaving(true);
+      setUploadProgress(0);
       try {
-        const uploadedUrls = await uploadVideos([result.assets[0].uri], user.uid);
+        const uploadedAssets = await uploadVideos([result.assets[0].uri], user.uid, (progress) => {
+          setUploadProgress(progress);
+        });
+        const uploadedUrls = uploadedAssets.map((asset) => asset.videoUrl);
+        const thumbnailUpdates = uploadedAssets.reduce((acc, asset) => {
+          if (asset.thumbnailUrl) {
+            acc[asset.videoUrl] = asset.thumbnailUrl;
+          }
+          return acc;
+        }, {} as Record<string, string>);
         setEditedVideos([...editedVideos, ...uploadedUrls]);
+        setEditedVideoThumbnails((prev) => ({ ...prev, ...thumbnailUpdates }));
       } catch (error) {
         Alert.alert('Virhe', 'Videon lataus epäonnistui');
       } finally {
         setSaving(false);
+        setUploadProgress(null);
       }
     }
   };
@@ -338,11 +414,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         
         // Merkitse merkintä jaetuksi
         if (user && !entry.shared) {
-          console.log('Marking entry as shared (image):', entry.id);
           await updateEntry(entry.id, { shared: true });
           const updatedEntry = { ...entry, shared: true };
           setEntry(updatedEntry);
-          console.log('Entry marked as shared successfully (image)');
         }
       } else {
         Alert.alert('Virhe', 'Kuvan lataaminen epäonnistui');
@@ -598,18 +672,47 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const renderVideos = () => {
     const videos = isEditing ? editedVideos : (entry.videos || []);
+    const playableVideos = videos.filter((uri) => !/\.enc(\?|$)/.test(uri));
+
     if (videos.length === 0) return null;
 
     return (
       <View style={styles.videoSection}>
-        {videos.map((uri, index) => (
-          <View key={index} style={styles.videoWrapper}>
+        {mediaResolving && (
+          <View style={styles.videoResolvingContainer}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.videoResolvingText}>Puretaan salattuja videoita...</Text>
+          </View>
+        )}
+
+        {!!videoResolveError && !mediaResolving && (
+          <Text style={styles.videoErrorText}>{videoResolveError}</Text>
+        )}
+
+        {playableVideos.map((uri, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.videoWrapper}
+            activeOpacity={0.9}
+            onPress={() => {
+              if (!isEditing) {
+                setVideoPlaybackError(null);
+                setSelectedVideo(uri);
+              }
+            }}
+            disabled={isEditing}
+          >
             <Video
               source={{ uri }}
               style={styles.videoPlayer}
               resizeMode={ResizeMode.COVER}
               useNativeControls
             />
+            {!isEditing && (
+              <View style={styles.videoOpenOverlay}>
+                <Text style={styles.videoOpenText}>▶ Avaa video</Text>
+              </View>
+            )}
             {isEditing && (
               <TouchableOpacity
                 style={styles.removeVideoButton}
@@ -618,7 +721,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 <Text style={styles.removeImageText}>✕</Text>
               </TouchableOpacity>
             )}
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
     );
@@ -676,6 +779,26 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           )}
         </View>
       </View>
+
+      {/* Upload Progress Indicator */}
+      {uploadProgress !== null && (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View 
+              style={[
+                styles.progressFill,
+                { width: `${uploadProgress}%` }
+              ]}
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {uploadProgress < 45 && 'Salataan videota...'}
+            {uploadProgress >= 45 && uploadProgress < 99 && 'Lähetetään...'}
+            {uploadProgress === 100 && 'Valmis!'}
+            {' '}{uploadProgress}%
+          </Text>
+        </View>
+      )}
 
       {/* Content */}
       <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.9 }} style={{ flex: 1 }}>
@@ -843,6 +966,50 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 <TouchableOpacity 
                   style={[styles.toolbarButton, styles.closeButton]}
                   onPress={() => setSelectedImage(null)}
+                >
+                  <Text style={styles.toolbarButtonText}>✕ Sulje</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
+      </Modal>
+
+      {/* Video Modal */}
+      <Modal
+        visible={selectedVideo !== null}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setSelectedVideo(null)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => setSelectedVideo(null)}
+          />
+
+          {selectedVideo && (
+            <>
+              <Video
+                source={{ uri: selectedVideo }}
+                style={styles.modalVideo}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                shouldPlay
+                onError={(error) => {
+                  console.error('Video playback error:', error);
+                  setVideoPlaybackError('Videon toisto epäonnistui tällä tiedostolla.');
+                }}
+              />
+
+              {!!videoPlaybackError && (
+                <Text style={styles.modalVideoErrorText}>{videoPlaybackError}</Text>
+              )}
+
+              <View style={styles.modalToolbar}>
+                <TouchableOpacity
+                  style={[styles.toolbarButton, styles.closeButton]}
+                  onPress={() => setSelectedVideo(null)}
                 >
                   <Text style={styles.toolbarButtonText}>✕ Sulje</Text>
                 </TouchableOpacity>
@@ -1336,6 +1503,33 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
+  videoResolvingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  videoResolvingText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+  },
+  videoErrorText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.error,
+  },
+  videoOpenOverlay: {
+    position: 'absolute',
+    right: spacing.sm,
+    bottom: spacing.sm,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  videoOpenText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+  },
   videoWrapper: {
     width: '100%',
     height: 220,
@@ -1405,6 +1599,17 @@ const styles = StyleSheet.create({
   modalImage: {
     width: '90%',
     height: '70%',
+  },
+  modalVideo: {
+    width: '90%',
+    height: '70%',
+    backgroundColor: colors.black,
+  },
+  modalVideoErrorText: {
+    marginTop: spacing.md,
+    color: colors.error,
+    textAlign: 'center',
+    paddingHorizontal: spacing.lg,
   },
   modalToolbar: {
     position: 'absolute',
@@ -1510,5 +1715,28 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSizes.md,
     fontWeight: typography.fontWeights.bold,
     color: colors.white,
+  },
+  progressContainer: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray50,
+  },
+  progressBar: {
+    height: 6,
+    backgroundColor: colors.gray100,
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+    marginBottom: spacing.sm,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  progressText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+    fontWeight: typography.fontWeights.medium,
   },
 });

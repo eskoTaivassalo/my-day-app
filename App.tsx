@@ -11,7 +11,8 @@ import { initializeNotifications } from './src/services/notificationService';
 LogBox.ignoreLogs([
   'AsyncStorage has been extracted from react-native core',
   '@firebase/auth: Auth',
-  'You are initializing Firebase Auth for React Native without providing AsyncStorage'
+  'You are initializing Firebase Auth for React Native without providing AsyncStorage',
+  'Attempted to import the module'
 ]);
 
 // Auth
@@ -32,6 +33,8 @@ import RemindersScreen from './src/screens/RemindersScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import ImageLibraryScreen from './src/screens/ImageLibraryScreen';
 import VideoLibraryScreen from './src/screens/VideoLibraryScreen';
+import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
+import EncryptionPassphraseScreen from './src/screens/EncryptionPassphraseScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -101,6 +104,7 @@ function AuthNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
+      <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
     </Stack.Navigator>
   );
 }
@@ -179,19 +183,29 @@ function AppNavigator() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="PrivacyPolicy"
+        component={PrivacyPolicyScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack.Navigator>
   );
 }
 
 // Root navigator with auth check
 function RootNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, encryptionStatus } = useAuth();
   const notificationListener = useRef<Notifications.Subscription | null>(null);
 
   useEffect(() => {
     if (user) {
+      console.log(`🚀 [App] User logged in: ${user.email}, initializing notifications...`);
       // Initialize notifications when user is logged in
       initializeNotifications();
+    } else {
+      console.log('🚀 [App] User logged out');
     }
   }, [user]);
 
@@ -214,6 +228,7 @@ function RootNavigator() {
 
 
   if (loading) {
+    console.log('🚀 [App] Auth loading...');
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -222,11 +237,19 @@ function RootNavigator() {
     );
   }
 
+  // Salauksen asetus tai avaus vaaditaan ennen kuin sovellus on käytettävissä
+  if (user && (encryptionStatus === 'needs_setup' || encryptionStatus === 'needs_passphrase')) {
+    console.log(`🔐 [App] Encryption status: ${encryptionStatus}, showing passphrase screen`);
+    return <EncryptionPassphraseScreen />;
+  }
+
+  console.log(`🚀 [App] Showing ${user ? 'AppNavigator' : 'AuthNavigator'}`);
   return user ? <AppNavigator /> : <AuthNavigator />;
 }
 
 // Main App component
 export default function App() {
+  console.log('🚀 [App] App starting...');
   return (
     <AuthProvider>
       <NavigationContainer>

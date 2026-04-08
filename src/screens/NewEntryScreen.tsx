@@ -272,6 +272,7 @@ export default function NewEntryScreen({ navigation }: any) {
 
       // Upload videos to Firebase Storage if any
       let videoUrls: string[] = [];
+      let videoThumbnails: Record<string, string> = {};
       if (selectedVideos.length > 0) {
         setUploadProgress(0);
         const videoUploadPromises = selectedVideos.map((uri, i) =>
@@ -282,7 +283,14 @@ export default function NewEntryScreen({ navigation }: any) {
             ));
           })
         );
-        videoUrls = await Promise.all(videoUploadPromises);
+        const videoAssets = await Promise.all(videoUploadPromises);
+        videoUrls = videoAssets.map((asset) => asset.videoUrl);
+        videoThumbnails = videoAssets.reduce((acc, asset) => {
+          if (asset.thumbnailUrl) {
+            acc[asset.videoUrl] = asset.thumbnailUrl;
+          }
+          return acc;
+        }, {} as Record<string, string>);
         setUploadProgress(null);
       }
 
@@ -293,6 +301,7 @@ export default function NewEntryScreen({ navigation }: any) {
           content: content.trim(),
           images: imageUrls,
           videos: videoUrls,
+          videoThumbnails,
           date: selectedDate,
           layout: layout,
           ...(location && { location }), // Lisää location vain jos se on olemassa

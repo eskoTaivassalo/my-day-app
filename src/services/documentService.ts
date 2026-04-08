@@ -10,11 +10,87 @@ import {
   where,
   Timestamp,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from './firebase';
+import * as FileSystem from 'expo-file-system/legacy';
+import { auth, db } from './firebase';
 import { Document } from '../types/Document';
+import { encodeBase64, decodeBase64 } from 'tweetnacl-util';
+import { encryptText, decryptText, encryptBytes, decryptBytes } from './encryptionService';
 
 const DOCUMENTS_COLLECTION = 'documents';
+const DECRYPTED_DOCUMENT_CACHE_DIR = `${FileSystem.cacheDirectory}decrypted_documents/`;
+
+const ensureDecryptedDocumentCacheDir = async (): Promise<void> => {
+  const dirInfo = await FileSystem.getInfoAsync(DECRYPTED_DOCUMENT_CACHE_DIR);
+  if (!dirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(DECRYPTED_DOCUMENT_CACHE_DIR, { intermediates: true });
+  }
+};
+
+const hashString = (value: string): string => {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+};
+
+export const isEncryptedDocumentUrl = (url: string): boolean => /\.enc(\?|$)/.test(url);
+
+const sanitizeExt = (ext: string): string => ext.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const getExtensionFromFileName = (fileName: string): string | null => {
+  const nameOnly = fileName.split('?')[0];
+  const lastDot = nameOnly.lastIndexOf('.');
+  if (lastDot === -1) return null;
+  const ext = sanitizeExt(nameOnly.slice(lastDot + 1));
+  return ext || null;
+};
+
+const getFallbackExtensionByType = (fileType: string): string => {
+  if (fileType === 'image') return 'jpg';
+  if (fileType === 'pdf') return 'pdf';
+  if (fileType === 'docx') return 'docx';
+  return 'bin';
+};
+
+const resolveExtension = (fileName: string, fileType: string): string =>
+  getExtensionFromFileName(fileName) ?? getFallbackExtensionByType(fileType);
+
+export const getDecryptedDocumentUri = async (
+  fileUrl: string,
+  fileName: string,
+  fileType: string
+): Promise<string> => {
+  if (!isEncryptedDocumentUrl(fileUrl)) {
+    return fileUrl;
+  }
+
+  try {
+    await ensureDecryptedDocumentCacheDir();
+    const extension = resolveExtension(fileName, fileType);
+    const localPath = `${DECRYPTED_DOCUMENT_CACHE_DIR}${hashString(fileUrl)}.${extension}`;
+
+    const localInfo = await FileSystem.getInfoAsync(localPath);
+    if (localInfo.exists) {
+      return localPath;
+    }
+
+    const response = await fetch(fileUrl);
+    const encryptedBuffer = await response.arrayBuffer();
+    const encryptedBytes = new Uint8Array(encryptedBuffer);
+    const decryptedBytes = decryptBytes(encryptedBytes);
+
+    await FileSystem.writeAsStringAsync(localPath, encodeBase64(decryptedBytes), {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    return localPath;
+  } catch (error) {
+    console.error('Error decrypting document file:', error);
+    return fileUrl;
+  }
+};
 
 /**
  * Upload document file to Firebase Storage
@@ -26,15 +102,47 @@ export const uploadDocumentFile = async (
   fileType: string
 ): Promise<string> => {
   try {
-    const response = await fetch(uri);
-    const blob = await response.blob();
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const rawBytes = decodeBase64(base64);
+    const encryptedBytes = encryptBytes(rawBytes);
+    const encryptedBase64 = encodeBase64(encryptedBytes);
 
-    const extension = fileType === 'image' ? 'jpg' : fileType;
-    const filename = `${userId}/${Date.now()}_${Math.random().toString(36).substring(7)}.${extension}`;
-    const storageRef = ref(storage, `documents/${filename}`);
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Ei kirjautumistietoja');
 
-    await uploadBytes(storageRef, blob);
-    const downloadUrl = await getDownloadURL(storageRef);
+    const bucket = process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET;
+    if (!bucket) throw new Error('Firebase storage bucket puuttuu ympäristömuuttujista');
+
+    const extension = resolveExtension(fileName, fileType);
+    const filename = `documents/${userId}/${Date.now()}_${Math.random().toString(36).substring(7)}.${extension}.enc`;
+    const encodedFilename = encodeURIComponent(filename);
+    const uploadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?uploadType=media&name=${encodedFilename}`;
+
+    const tempFilePath = `${FileSystem.cacheDirectory}enc_doc_${Date.now()}_${Math.random().toString(36).slice(2)}.enc`;
+    await FileSystem.writeAsStringAsync(tempFilePath, encryptedBase64, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    const result = await FileSystem.uploadAsync(uploadUrl, tempFilePath, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/octet-stream',
+      },
+    });
+
+    await FileSystem.deleteAsync(tempFilePath, { idempotent: true });
+
+    if (!result || result.status < 200 || result.status >= 300) {
+      throw new Error(`Dokumentin upload epäonnistui (status ${result?.status}): ${result?.body}`);
+    }
+
+    const responseData = JSON.parse(result.body);
+    const downloadToken = responseData.downloadTokens;
+    const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedFilename}?alt=media&token=${downloadToken}`;
 
     return downloadUrl;
   } catch (error) {
@@ -54,7 +162,7 @@ export const createDocument = async (
     // Remove undefined values to avoid Firestore errors
     const docData: any = {
       userId,
-      title: document.title,
+      title: encryptText(document.title),          // Salattu
       category: document.category,
       fileUrl: document.fileUrl,
       fileName: document.fileName,
@@ -62,13 +170,14 @@ export const createDocument = async (
       fileSize: document.fileSize,
       date: Timestamp.fromDate(document.date),
       tags: document.tags,
+      _encrypted: true,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
 
     // Only add optional fields if they have values
     if (document.description) {
-      docData.description = document.description;
+      docData.description = encryptText(document.description); // Salattu
     }
     if (document.thumbnailUrl) {
       docData.thumbnailUrl = document.thumbnailUrl;
@@ -99,11 +208,15 @@ export const getDocuments = async (userId: string): Promise<Document[]> => {
 
     querySnapshot.forEach((doc) => {
       const data = doc.data();
+      const isEncrypted = data._encrypted === true;
+
       documents.push({
         id: doc.id,
         userId: data.userId,
-        title: data.title,
-        description: data.description,
+        title: isEncrypted ? decryptText(data.title) : data.title,
+        description: data.description
+          ? isEncrypted ? decryptText(data.description) : data.description
+          : undefined,
         category: data.category,
         fileUrl: data.fileUrl,
         fileName: data.fileName,

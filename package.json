@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-navigation/bottom-tabs": "^7.10.1",
@@ -29,13 +30,18 @@
     "expo-location": "^19.0.8",
     "expo-media-library": "~18.2.1",
     "expo-notifications": "~0.32.16",
+    "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
+    "expo-video-thumbnails": "~10.0.8",
     "expo-web-browser": "^15.0.10",
     "firebase": "^12.8.0",
     "react": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-view-shot": "^4.0.3"
+    "react-native-get-random-values": "^2.0.0",
+    "react-native-view-shot": "^4.0.3",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

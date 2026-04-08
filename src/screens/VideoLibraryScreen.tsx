@@ -12,7 +12,7 @@ import { Video,ResizeMode } from 'expo-av';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '../contexts/AuthContext';
-import { getEntries } from '../services/diaryService';
+import { getEntries, resolveVideoUriForPlayback } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 interface VideoItem {
@@ -51,11 +51,16 @@ export default function VideoLibraryScreen({ navigation }: any) {
       const entries = await getEntries(user.uid);
       const allVideos: VideoItem[] = [];
 
-      entries.forEach((entry) => {
-        (entry.videos || []).forEach((uri) => {
-          allVideos.push({ uri, entryId: entry.id, date: entry.date });
-        });
-      });
+      for (const entry of entries) {
+        for (const uri of entry.videos || []) {
+          try {
+            const playableUri = await resolveVideoUriForPlayback(uri);
+            allVideos.push({ uri: playableUri, entryId: entry.id, date: entry.date });
+          } catch (error) {
+            console.error('Error resolving encrypted video for playback:', error);
+          }
+        }
+      }
 
       setVideos(allVideos);
     } catch (error) {

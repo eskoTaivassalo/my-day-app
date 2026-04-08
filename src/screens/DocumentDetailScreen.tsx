@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Document, DOCUMENT_CATEGORIES } from '../types/Document';
-import { deleteDocument } from '../services/documentService';
+import { deleteDocument, getDecryptedDocumentUri, isEncryptedDocumentUrl } from '../services/documentService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function DocumentDetailScreen({ route, navigation }: any) {
@@ -25,13 +25,59 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
     updatedAt: new Date(docParam.updatedAt),
   };
   const [loading, setLoading] = useState(false);
+  const [resolvedFileUri, setResolvedFileUri] = useState(document.fileUrl);
+  const [resolvedThumbnailUri, setResolvedThumbnailUri] = useState(document.thumbnailUrl || null);
+  const [resolvingFile, setResolvingFile] = useState(false);
   const category = DOCUMENT_CATEGORIES[document.category];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const resolveUris = async () => {
+      try {
+        setResolvingFile(true);
+
+        const decryptedFileUri = await getDecryptedDocumentUri(
+          document.fileUrl,
+          document.fileName,
+          document.fileType
+        );
+        if (isMounted) {
+          setResolvedFileUri(decryptedFileUri);
+        }
+
+        if (document.thumbnailUrl) {
+          const decryptedThumbUri = await getDecryptedDocumentUri(
+            document.thumbnailUrl,
+            document.fileName,
+            document.fileType
+          );
+          if (isMounted) {
+            setResolvedThumbnailUri(decryptedThumbUri);
+          }
+        }
+      } catch (error) {
+        console.error('Error resolving encrypted document URIs:', error);
+      } finally {
+        if (isMounted) {
+          setResolvingFile(false);
+        }
+      }
+    };
+
+    resolveUris();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [document.fileUrl, document.thumbnailUrl, document.fileName, document.fileType]);
 
   const handleOpenDocument = async () => {
     try {
-      const supported = await Linking.canOpenURL(document.fileUrl);
+      const openUri = resolvedFileUri || document.fileUrl;
+      const supported = await Linking.canOpenURL(openUri);
       if (supported) {
-        await Linking.openURL(document.fileUrl);
+        await Linking.openURL(openUri);
       } else {
         Alert.alert('Virhe', 'Tiedostoa ei voida avata');
       }
@@ -44,10 +90,17 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
   const handleShareDocument = async () => {
     try {
       setLoading(true);
+
+      const targetUri = resolvedFileUri || document.fileUrl;
       
-      // Download file to cache
-      const fileUri = FileSystem.cacheDirectory + document.fileName;
-      const downloadResult = await FileSystem.downloadAsync(document.fileUrl, fileUri);
+      let shareUri = targetUri;
+
+      // Jos tiedosto on vielä salatussa etä-URL:ssa, lataa cacheen jakamista varten
+      if (!targetUri.startsWith('file://')) {
+        const fileUri = FileSystem.cacheDirectory + document.fileName;
+        const downloadResult = await FileSystem.downloadAsync(targetUri, fileUri);
+        shareUri = downloadResult.uri;
+      }
       
       // Check if sharing is available
       const isAvailable = await Sharing.isAvailableAsync();
@@ -57,7 +110,7 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
       }
 
       // Share the file
-      await Sharing.shareAsync(downloadResult.uri);
+      await Sharing.shareAsync(shareUri);
     } catch (error) {
       console.error('Error sharing document:', error);
       Alert.alert('Virhe', 'Dokumentin jakaminen epäonnistui');
@@ -105,13 +158,20 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Document Preview */}
-        {document.fileType === 'image' && document.thumbnailUrl && (
+        {document.fileType === 'image' && (resolvedThumbnailUri || document.thumbnailUrl) && (
           <View style={styles.previewContainer}>
-            <Image 
-              source={{ uri: document.thumbnailUrl }} 
-              style={styles.previewImage}
-              resizeMode="contain"
-            />
+            {resolvingFile && isEncryptedDocumentUrl(document.fileUrl) ? (
+              <View style={styles.previewLoadingContainer}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.previewLoadingText}>Puretaan salattua kuvaa...</Text>
+              </View>
+            ) : (
+              <Image 
+                source={{ uri: resolvedThumbnailUri || document.thumbnailUrl! }} 
+                style={styles.previewImage}
+                resizeMode="contain"
+              />
+            )}
           </View>
         )}
 

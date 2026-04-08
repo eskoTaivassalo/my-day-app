@@ -41,7 +41,6 @@ export const requestNotificationPermissions = async (): Promise<boolean> => {
     }
 
     if (finalStatus !== 'granted') {
-      console.log('Notification permissions not granted');
       return false;
     }
 
@@ -154,7 +153,6 @@ export const scheduleDailyReminders = async (settings: NotificationSettings): Pr
       }
     }
 
-    console.log('Daily reminders scheduled successfully');
   } catch (error) {
     console.error('Error scheduling daily reminders:', error);
   }
@@ -166,7 +164,6 @@ export const scheduleDailyReminders = async (settings: NotificationSettings): Pr
 export const cancelAllNotifications = async (): Promise<void> => {
   try {
     await Notifications.cancelAllScheduledNotificationsAsync();
-    console.log('All notifications cancelled');
   } catch (error) {
     console.error('Error cancelling notifications:', error);
   }
@@ -178,7 +175,6 @@ export const cancelAllNotifications = async (): Promise<void> => {
 export const getScheduledNotifications = async () => {
   try {
     const notifications = await Notifications.getAllScheduledNotificationsAsync();
-    console.log('Scheduled notifications:', notifications);
     return notifications;
   } catch (error) {
     console.error('Error getting scheduled notifications:', error);

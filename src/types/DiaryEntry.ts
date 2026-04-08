@@ -5,6 +5,7 @@ export interface DiaryEntry {
   content: string;
   images: string[]; // Array of image URIs
   videos?: string[]; // Array of video URIs
+  videoThumbnails?: Record<string, string>; // videoUrl -> thumbnail image URL
   location?: {
     latitude: number;
     longitude: number;

@@ -9,14 +9,24 @@ import {
   Image,
   RefreshControl,
   Alert,
+  ActivityIndicator,
   Animated,
   TextInput,
   Dimensions,
+  InteractionManager,
+  Easing,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { useAuth } from '../contexts/AuthContext';
-import { getEntries, getUserProfile } from '../services/diaryService';
+import {
+  getEntriesFast,
+  getUserProfile,
+  getCachedVideoThumbnailUri,
+  ensureVideoThumbnailCached,
+  resolveEntryImagesInBackground,
+  resolveVideoUriForPlayback,
+} from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 import AchievementToast from '../components/AchievementToast';
 import ReminderToast from '../components/ReminderToast';
@@ -31,7 +41,7 @@ import {
   getUnlockedAchievementIds,
   addUnlockedAchievement,
 } from '../services/achievementStorageService';
-import { Video, ResizeMode } from 'expo-av';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import {
   achievements,
   calculateStats,
@@ -45,6 +55,7 @@ type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
@@ -70,10 +81,79 @@ export default function TimelineScreen({ navigation }: any) {
   const [reminderToastMessage, setReminderToastMessage] = useState('');
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
   const [visibleEntryIds, setVisibleEntryIds] = useState<Set<string>>(new Set());
+  const [videoThumbnailMap, setVideoThumbnailMap] = useState<Record<string, string>>({});
   const { user } = useAuth();
   
   // Muista viimeiset tilastot joista näytettiin toast
   const lastProcessedStats = useRef<Stats | null>(null);
+  const entriesLoadInFlightRef = useRef(false);
+  const thumbnailBackfillQueueRef = useRef<Array<{ entryId: string; videoUrl: string }>>([]);
+  const thumbnailBackfillInFlightRef = useRef(false);
+  const thumbnailBackfillSeenRef = useRef<Set<string>>(new Set());
+  const videoThumbnailFadeMapRef = useRef<Record<string, Animated.Value>>({});
+
+  const getVideoThumbnailFadeValue = (entryId: string): Animated.Value => {
+    if (!videoThumbnailFadeMapRef.current[entryId]) {
+      videoThumbnailFadeMapRef.current[entryId] = new Animated.Value(0);
+    }
+    return videoThumbnailFadeMapRef.current[entryId];
+  };
+
+  const resetVideoThumbnailFade = (entryId: string) => {
+    getVideoThumbnailFadeValue(entryId).setValue(0);
+  };
+
+  const animateVideoThumbnailFadeIn = (entryId: string) => {
+    Animated.timing(getVideoThumbnailFadeValue(entryId), {
+      toValue: 1,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const processThumbnailBackfillQueue = async () => {
+    if (thumbnailBackfillInFlightRef.current) {
+      return;
+    }
+
+    thumbnailBackfillInFlightRef.current = true;
+    try {
+      while (thumbnailBackfillQueueRef.current.length > 0) {
+        const next = thumbnailBackfillQueueRef.current.shift();
+        if (!next) continue;
+
+        // Wait until UI interactions settle to avoid jank while scrolling.
+        await new Promise<void>((resolve) => {
+          InteractionManager.runAfterInteractions(() => resolve());
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+
+        const thumbnailUri = await ensureVideoThumbnailCached(next.videoUrl);
+        if (thumbnailUri) {
+          resetVideoThumbnailFade(next.entryId);
+          setVideoThumbnailMap((prev) => ({ ...prev, [next.entryId]: thumbnailUri }));
+          console.log(`✅ [thumbnailBackfill] Cached thumbnail ready for ${next.entryId}`);
+        } else {
+          console.log(`⚠️ [thumbnailBackfill] Could not build thumbnail for ${next.entryId}`);
+        }
+      }
+    } finally {
+      thumbnailBackfillInFlightRef.current = false;
+    }
+  };
+
+  const enqueueThumbnailBackfill = (entryId: string, videoUrl: string) => {
+    const queueKey = `${entryId}:${videoUrl}`;
+    if (thumbnailBackfillSeenRef.current.has(queueKey)) {
+      return;
+    }
+
+    thumbnailBackfillSeenRef.current.add(queueKey);
+    thumbnailBackfillQueueRef.current.push({ entryId, videoUrl });
+    void processThumbnailBackfillQueue();
+  };
 
   // Suodata merkinnät hakutermin perusteella
   const filteredEntries = entries.filter((entry) => {
@@ -87,49 +167,49 @@ export default function TimelineScreen({ navigation }: any) {
     return titleMatch || contentMatch || locationMatch;
   });
 
-  useEffect(() => {
-    if (user) {
-      // Ladataan saavutukset ENSIN, sitten vasta entries
-      // Näin unlockedAchievementIds on päivitetty ennen saavutusten tarkistusta
-      loadUnlockedAchievements().then((ids) => {
-        loadEntries(ids).then(() => maybeShowTodayReminders({ ignoreLastShown: true }));
-      });
-      loadUserProfile();
-    }
-  }, [user]);
-
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     React.useCallback(() => {
+      console.log('🎯 [TimelineScreen] useFocusEffect triggered, user:', user?.uid);
       if (user) {
         // Lataa saavutukset ensin, sitten entries
+        console.log('🎯 [TimelineScreen] Starting achievement load...');
         loadUnlockedAchievements().then((ids) => {
-          loadEntries(ids).then(() => maybeShowTodayReminders({ ignoreLastShown: true }));
+          console.log(`🎯 [TimelineScreen] Loaded ${ids.length} unlocked achievements:`, ids);
+          console.log('🎯 [TimelineScreen] Starting entries load...');
+          loadEntries(ids).then(() => {
+            console.log('🎯 [TimelineScreen] Entries loaded, checking for reminders...');
+            maybeShowTodayReminders({ ignoreLastShown: true });
+          });
         });
+        console.log('🎯 [TimelineScreen] Starting profile load...');
         loadUserProfile();
       }
     }, [user])
   );
 
   const loadUnlockedAchievements = async (): Promise<number[]> => {
+    console.log('📊 [loadUnlockedAchievements] Starting...');
     if (!user) return [];
     
     try {
       const ids = await getUnlockedAchievementIds(user.uid);
+      console.log(`📊 [loadUnlockedAchievements] Got ${ids.length} achievements:`, ids);
       setUnlockedAchievementIds(ids);
-      console.log(`Loaded ${ids.length} previously unlocked achievements`);
       return ids;
     } catch (error) {
-      console.error('Error loading unlocked achievements:', error);
+      console.error('❌ [loadUnlockedAchievements] Error:', error);
       return [];
     }
   };
 
   const loadUserProfile = async () => {
+    console.log('👤 [loadUserProfile] Starting...');
     if (!user) return;
 
     try {
       const profile = await getUserProfile(user.uid);
+      console.log('👤 [loadUserProfile] Got profile:', profile?.displayName);
       if (profile?.photoURL) {
         setProfileImage(profile.photoURL);
       }
@@ -140,87 +220,141 @@ export default function TimelineScreen({ navigation }: any) {
 
   const loadEntries = async (unlockedIds?: number[]) => {
     if (!user) return;
+
+    // Estä päällekkäiset lataukset (esim. focus + strict mode -tuplakutsu)
+    if (entriesLoadInFlightRef.current) {
+      console.log('⚠️ [loadEntries] Load already in flight, skipping');
+      return;
+    }
+    entriesLoadInFlightRef.current = true;
+    console.log('📚 [loadEntries] Starting entry load...');
     
     // Use provided IDs or fall back to state (for refresh scenarios)
     const previouslyUnlockedIds = unlockedIds !== undefined ? unlockedIds : unlockedAchievementIds;
+    console.log(`📚 [loadEntries] Previously unlocked achievements: ${previouslyUnlockedIds.length}`);
     
     try {
-      const userEntries = await getEntries(user.uid);
-      console.log('TimelineScreen - Loaded entries:', userEntries.length);
-      console.log('Entries with shared=true:', userEntries.filter(e => e.shared).length);
-      console.log('Previously unlocked achievements:', previouslyUnlockedIds.length);
+      setEntriesLoading(true);
+      const userEntries = await getEntriesFast(user.uid, 10);
+      console.log(`📚 [loadEntries] Got ${userEntries.length} entries from Firebase`);
+
+      // Näytä lista heti (älä odota saavutusten tallennuksia)
+      setEntries(userEntries);
+      setEntriesLoading(false);
+      console.log('📚 [loadEntries] UI updated with entries');
       
       // Calculate new stats
       const newStats = calculateStats(userEntries);
+      console.log(`📊 [loadEntries] New stats: ${newStats.totalEntries} entries, ${newStats.currentStreak} day streak, ${newStats.totalImages} images`);
       
       // Check for new achievements based on current stats
-      // Compare with previously unlocked achievement IDs stored in AsyncStorage
-      const allPossibleAchievements = checkNewAchievements(
-        { totalEntries: 0, totalImages: 0, longestStreak: 0, currentStreak: 0, firstEntryDate: null, totalWords: 0, multiDayCount: 0, sharedCount: 0, entriesWithLocation: 0, earlyBirdCount: 0, nightOwlCount: 0, weekendCount: 0, maxImagesInEntry: 0 },
-        newStats
-      );
+      // Use lastProcessedStats to avoid repeated achievements (not just empty object)
+      const oldStats = lastProcessedStats.current || {
+        totalEntries: 0,
+        totalImages: 0,
+        longestStreak: 0,
+        currentStreak: 0,
+        firstEntryDate: null,
+        totalWords: 0,
+        multiDayCount: 0,
+        sharedCount: 0,
+        entriesWithLocation: 0,
+        earlyBirdCount: 0,
+        nightOwlCount: 0,
+        weekendCount: 0,
+        maxImagesInEntry: 0,
+      };
       
-      // Filter out achievements that were already unlocked (saved in AsyncStorage)
-      const newAchievements = allPossibleAchievements.filter(
+      const allStatsAchievements = checkNewAchievements(oldStats, newStats);
+      console.log(`🏆 [loadEntries] Achievement check: found ${allStatsAchievements.length} NEW achievements (old vs new stats)`);
+      
+      // Sync all achievements that are new according to stats but missing from AsyncStorage
+      const achievementsToSync = allStatsAchievements.filter(
         achievement => !previouslyUnlockedIds.includes(achievement.id)
       );
+      console.log(`🏆 [loadEntries] Achievements to sync+toast: ${achievementsToSync.length}`, achievementsToSync.map(a => a.name));
       
-      console.log('All possible achievements:', allPossibleAchievements.map(a => a.id));
-      console.log('New achievements to show:', newAchievements.map(a => a.id));
-      
-      if (newAchievements.length > 0 && user) {
-        // Update ref to prevent showing same toasts again
-        lastProcessedStats.current = newStats;
-        
-        // Save newly unlocked achievements to AsyncStorage
-        for (const achievement of newAchievements) {
-          await addUnlockedAchievement(user.uid, achievement.id);
-        }
-        
+      if (achievementsToSync.length > 0 && user) {
+        console.log(`🏆 [loadEntries] Saving ${achievementsToSync.length} new achievements to AsyncStorage...`);
+        // Tallenna saavutukset rinnakkain taustalla (ei blokata renderöintiä)
+        void Promise.all(
+          achievementsToSync.map((achievement) => addUnlockedAchievement(user.uid, achievement.id))
+        ).catch((error) => {
+          console.error('❌ [loadEntries] Error saving achievements:', error);
+        });
+
         // Update local state
-        setUnlockedAchievementIds(prev => [...prev, ...newAchievements.map(a => a.id)]);
-        
+        setUnlockedAchievementIds((prev) => [...prev, ...achievementsToSync.map((a) => a.id)]);
+
         // Show toast for the first new achievement
-        setAchievementToast(newAchievements[0]);
+        console.log(`🏆 [loadEntries] Showing achievement toast: ${achievementsToSync[0].name}`);
+        setAchievementToast(achievementsToSync[0]);
         setShowToast(true);
-        
+
         // If there are multiple achievements, show them one by one
-        if (newAchievements.length > 1) {
-          for (let i = 1; i < Math.min(3, newAchievements.length); i++) {
+        if (achievementsToSync.length > 1) {
+          for (let i = 1; i < Math.min(3, achievementsToSync.length); i++) {
             setTimeout(() => {
-              setAchievementToast(newAchievements[i]);
+              console.log(`🏆 [loadEntries] Showing achievement toast #${i + 1}: ${achievementsToSync[i].name}`);
+              setAchievementToast(achievementsToSync[i]);
               setShowToast(true);
             }, i * 5500); // 5.5 second delay between each toast
           }
         }
       }
       
+      // Always update the ref to current stats, so next load won't show achievements again
+      lastProcessedStats.current = newStats;
       setStats(newStats);
-      setEntries(userEntries);
+      console.log('✅ [loadEntries] Stats updated');
+
+      // Puretaan kuvat taustalla (ei blokata ensimmäistä renderiä)
+      console.log('🖼️ [loadEntries] Starting background image resolve...');
+      resolveEntryImagesInBackground(userEntries)
+        .then((entriesWithImages) => {
+          console.log('🖼️ [loadEntries] Images resolved');
+          setEntries(entriesWithImages);
+
+          console.log('🎬 [loadEntries] Starting background video thumbnail generation...');
+          void resolveVideoThumbnailsInBackground(entriesWithImages);
+        })
+        .catch((error) => {
+          console.error('❌ [loadEntries] Error resolving entry images in background:', error);
+        });
     } catch (error) {
-      console.error('Error loading entries:', error);
+      console.error('❌ [loadEntries] Error loading entries:', error);
       setEntries([]);
+      setEntriesLoading(false);
+    } finally {
+      console.log('✅ [loadEntries] Load complete');
+      entriesLoadInFlightRef.current = false;
     }
   };
 
   const onRefresh = async () => {
+    console.log('🔄 [onRefresh] User initiated refresh');
     setRefreshing(true);
     const ids = await loadUnlockedAchievements();
     await loadEntries(ids);
     await maybeShowTodayReminders({ ignoreLastShown: true });
+    console.log('✅ [onRefresh] Complete');
     setRefreshing(false);
   };
 
   const maybeShowTodayReminders = async (options?: { ignoreLastShown?: boolean }) => {
+    console.log('🔔 [maybeShowTodayReminders] Checking reminders...');
     const showEnabled = await getShowTodayRemindersAlert();
     if (!showEnabled) {
+      console.log('🔔 [maybeShowTodayReminders] Reminders disabled');
       return;
     }
 
     const todayKey = getTodayDateKey();
     const lastShown = await getLastReminderAlertDate();
+    console.log(`🔔 [maybeShowTodayReminders] Today: ${todayKey}, Last shown: ${lastShown}`);
 
     if (!options?.ignoreLastShown && lastShown === todayKey) {
+      console.log('🔔 [maybeShowTodayReminders] Already shown today, skipping');
       return;
     }
 
@@ -310,6 +444,94 @@ export default function TimelineScreen({ navigation }: any) {
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 35,
   }).current;
+
+  const resolveVideoThumbnailsInBackground = async (entriesToResolve: DiaryEntry[]) => {
+    // Generate thumbnails sequentially to avoid UI blocking
+    // Skip first render - defer slightly to prevent UI freeze
+    const entriesWithVideos = entriesToResolve.filter((e) => e.videos && e.videos.length > 0);
+    console.log(`🎬 [resolveVideoThumbnailsInBackground] Starting thumbnail generation for ${entriesWithVideos.length} entries (deferring 1s)`);
+    
+    setTimeout(async () => {
+      console.log(`🎬 [resolveVideoThumbnailsInBackground] Timer fired, starting sequential thumbnail generation...`);
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (const entry of entriesToResolve) {
+        try {
+          if (!entry.videos || entry.videos.length === 0) continue;
+
+          const firstVideoUri = entry.videos[0];
+          if (!firstVideoUri) continue;
+
+          const storedThumbnailUrl = entry.videoThumbnails?.[firstVideoUri];
+          if (storedThumbnailUrl) {
+            resetVideoThumbnailFade(entry.id);
+            setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: storedThumbnailUrl }));
+            successCount++;
+            continue;
+          }
+
+          const cachedThumbnail = await getCachedVideoThumbnailUri(firstVideoUri);
+          if (cachedThumbnail) {
+            resetVideoThumbnailFade(entry.id);
+            setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: cachedThumbnail }));
+            successCount++;
+            continue;
+          }
+
+          // Encrypted videos are handled in an idle backfill queue to avoid scroll jank.
+          if (/\.enc(\?|$)/.test(firstVideoUri)) {
+            enqueueThumbnailBackfill(entry.id, firstVideoUri);
+            console.log(`🕒 [resolveVideoThumbnailsInBackground] Enqueued encrypted thumbnail backfill for ${entry.id}`);
+            failCount++;
+            continue;
+          }
+
+          // Small delay between each thumbnail generation
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          console.log(`🎬 [resolveVideoThumbnailsInBackground] Getting thumbnail for entry ${entry.id}...`);
+          const startTime = Date.now();
+          
+          try {
+            const playableVideoUri = await resolveVideoUriForPlayback(firstVideoUri);
+            console.log(`🎬 [resolveVideoThumbnailsInBackground] Resolved video URI for ${entry.id} in ${Date.now() - startTime}ms`);
+            
+            const thumbnailStart = Date.now();
+            // Timeout: skip thumbnail if it takes longer than 15 seconds
+            const thumbnailPromise = VideoThumbnails.getThumbnailAsync(playableVideoUri, {
+              time: 0,
+              quality: 0.6,
+            });
+            
+            const timeoutPromise = new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('Thumbnail generation timeout')), 15000)
+            );
+            
+            const thumbnailResult = await Promise.race([thumbnailPromise, timeoutPromise]);
+            console.log(`🎬 [resolveVideoThumbnailsInBackground] Generated thumbnail for ${entry.id} in ${Date.now() - thumbnailStart}ms`);
+
+            if (thumbnailResult?.uri) {
+              console.log(`✅ [resolveVideoThumbnailsInBackground] Thumbnail generated for entry ${entry.id}`);
+              successCount++;
+              setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: thumbnailResult.uri }));
+            } else {
+              console.log(`⚠️ [resolveVideoThumbnailsInBackground] No thumbnail URI returned for ${entry.id}`);
+              failCount++;
+            }
+          } catch (innerError) {
+            console.log(`⚠️ [resolveVideoThumbnailsInBackground] Inner error for ${entry.id}:`, innerError);
+            failCount++;
+          }
+        } catch (error) {
+          // Thumbnail ei välttämättä synny kaikille vanhoille videoille.
+          console.log(`⚠️ [resolveVideoThumbnailsInBackground] Thumbnail generation failed for entry ${entry.id}:`, error);
+          failCount++;
+        }
+      }
+      console.log(`✅ [resolveVideoThumbnailsInBackground] Complete: ${successCount} success, ${failCount} failed`);
+    }, 1000); // Delay 1 second to not block initial render
+  };
 
   const renderImages = (images: string[], layout: LayoutType = 'grid', title?: string, content?: string) => {
     if (images.length === 0) return null;
@@ -432,24 +654,39 @@ export default function TimelineScreen({ navigation }: any) {
       if (!item.videos || item.videos.length === 0) return null;
 
       const shouldRenderVideo = visibleEntryIds.has(item.id);
+      const thumbnailUri = videoThumbnailMap[item.id];
+      const fadeValue = getVideoThumbnailFadeValue(item.id);
 
       return (
         <View style={styles.timelineVideoPreviewContainer}>
           <View style={styles.timelineVideoPreviewCard}>
-            {shouldRenderVideo ? (
-              <Video
-                source={{ uri: item.videos[0] }}
-                style={styles.timelineVideoPreviewPlayer}
-                resizeMode={ResizeMode.COVER}
-                shouldPlay={false}
-                isLooping={false}
-                useNativeControls={false}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.timelineVideoPlaceholder,
+                styles.timelineVideoLayer,
+                {
+                  opacity: fadeValue.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 0],
+                  }),
+                },
+              ]}
+            >
+              <Text style={styles.timelineVideoPlaceholderIcon}>🎥</Text>
+            </Animated.View>
+
+            {shouldRenderVideo && thumbnailUri ? (
+              <Animated.Image
+                source={{ uri: thumbnailUri }}
+                style={[styles.timelineVideoPreviewPlayer, { opacity: fadeValue }]}
+                resizeMode="cover"
+                fadeDuration={0}
+                onLoadEnd={() => {
+                  animateVideoThumbnailFadeIn(item.id);
+                }}
               />
-            ) : (
-              <View style={styles.timelineVideoPlaceholder}>
-                <Text style={styles.timelineVideoPlaceholderIcon}>🎥</Text>
-              </View>
-            )}
+            ) : null}
 
             <View style={styles.timelineVideoBadge}>
               <Text style={styles.timelineVideoBadgeText}>Video</Text>
@@ -836,29 +1073,36 @@ export default function TimelineScreen({ navigation }: any) {
           />
         }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <View style={styles.emptyIconContainer}>
-              <Text style={styles.emptyIcon}>{searchQuery.trim() ? '🔍' : '📖'}</Text>
+          entriesLoading ? (
+            <View style={styles.emptyContainer}>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={styles.loadingEntriesText}>Ladataan merkintöjä...</Text>
             </View>
-            <Text style={styles.emptyTitle}>
-              {searchQuery.trim()
-                ? `Ei tuloksia haulle "${searchQuery}"`
-                : 'Aloita päiväkirjan kirjoittaminen'}
-            </Text>
-            <Text style={styles.emptySubtitle}>
-              {searchQuery.trim()
-                ? 'Kokeile erilaista hakusanaa'
-                : 'Tallenna muistosi ja hetket helposti\npäivä kerrallaan'}
-            </Text>
-            {!searchQuery.trim() && (
-              <TouchableOpacity
-                style={styles.emptyButton}
-                onPress={() => navigation.navigate('NewEntry')}
-              >
-                <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIconContainer}>
+                <Text style={styles.emptyIcon}>{searchQuery.trim() ? '🔍' : '📖'}</Text>
+              </View>
+              <Text style={styles.emptyTitle}>
+                {searchQuery.trim()
+                  ? `Ei tuloksia haulle "${searchQuery}"`
+                  : 'Aloita päiväkirjan kirjoittaminen'}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {searchQuery.trim()
+                  ? 'Kokeile erilaista hakusanaa'
+                  : 'Tallenna muistosi ja hetket helposti\npäivä kerrallaan'}
+              </Text>
+              {!searchQuery.trim() && (
+                <TouchableOpacity
+                  style={styles.emptyButton}
+                  onPress={() => navigation.navigate('NewEntry')}
+                >
+                  <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )
         }
       />
 
@@ -1248,6 +1492,12 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSizes.md,
     fontWeight: typography.fontWeights.semibold,
   },
+  loadingEntriesText: {
+    ...commonStyles.body,
+    color: colors.textSecondary,
+    marginTop: spacing.md,
+    textAlign: 'center',
+  },
   fab: {
     position: 'absolute',
     right: spacing.lg,
@@ -1442,6 +1692,16 @@ const styles = StyleSheet.create({
   timelineVideoPreviewPlayer: {
     width: '100%',
     height: '100%',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  timelineVideoLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   timelineVideoPlaceholder: {
     width: '100%',

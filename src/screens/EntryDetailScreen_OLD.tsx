@@ -232,10 +232,6 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   const renderImages = () => {
     const imagesToShow = isEditing ? editedImages : entry.images;
     
-    console.log('Current layout:', layout);
-    console.log('Text position:', textPosition);
-    console.log('Image shape:', imageShape);
-    console.log('Text overlay:', textOverlay);
 
     if (imagesToShow.length === 0) {
       return isEditing ? (
@@ -798,7 +794,6 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
               <TouchableOpacity
                 style={styles.modalSaveButton}
                 onPress={async () => {
-                  console.log('Saving layout:', tempLayout);
                   setLayout(tempLayout);
                   setTextPosition(tempTextPosition);
                   setImageShape(tempImageShape);

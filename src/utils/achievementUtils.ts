@@ -248,7 +248,6 @@ export const calculateStats = (entries: DiaryEntry[]): Stats => {
 
   // Laske jaetut merkinnät
   const sharedCount = entries.filter(entry => entry.shared === true).length;
-  console.log('Calculating stats - Shared entries:', sharedCount, 'Total entries:', entries.length);
 
   // Laske merkinnät joissa on sijainti
   const entriesWithLocation = entries.filter(entry => entry.location).length;

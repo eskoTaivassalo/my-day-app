@@ -18,6 +18,7 @@ export default function RegisterScreen({ navigation }: any) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [gdprAccepted, setGdprAccepted] = useState(false);
   const { signUp } = useAuth();
 
   const handleRegister = async () => {
@@ -34,6 +35,11 @@ export default function RegisterScreen({ navigation }: any) {
 
     if (password !== confirmPassword) {
       Alert.alert('Virhe', 'Salasanat eivät täsmää');
+      return;
+    }
+
+    if (!gdprAccepted) {
+      Alert.alert('Tietosuoja', 'Sinun täytyy hyväksyä tietosuojaseloste rekisteröitymispääseksä.');
       return;
     }
 
@@ -116,15 +122,36 @@ export default function RegisterScreen({ navigation }: any) {
             />
 
             <TouchableOpacity
-              style={[styles.button, loading && styles.buttonDisabled]}
+              style={[styles.button, (loading || !gdprAccepted) && styles.buttonDisabled]}
               onPress={handleRegister}
-              disabled={loading}
+              disabled={loading || !gdprAccepted}
             >
               {loading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.buttonText}>Rekisteröidy</Text>
               )}
+            </TouchableOpacity>
+
+            {/* GDPR-hyväksyntä */}
+            <TouchableOpacity
+              style={styles.gdprRow}
+              onPress={() => setGdprAccepted(!gdprAccepted)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.checkbox, gdprAccepted && styles.checkboxChecked]}>
+                {gdprAccepted && <Text style={styles.checkmark}>✓</Text>}
+              </View>
+              <Text style={styles.gdprText}>
+                Olen lukenut ja hyväksyän{' '}
+                <Text
+                  style={styles.gdprLink}
+                  onPress={() => navigation.navigate('PrivacyPolicy')}
+                >
+                  tietosuojaselosteen
+                </Text>
+                {' '}(GDPR)
+              </Text>
             </TouchableOpacity>
 
             {/* Login Link */}
@@ -219,6 +246,42 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#007AFF',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  gdprRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 16,
+    gap: 10,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+    flexShrink: 0,
+  },
+  checkboxChecked: {
+    backgroundColor: '#007AFF',
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  gdprText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#555',
+    lineHeight: 20,
+  },
+  gdprLink: {
+    color: '#007AFF',
+    textDecorationLine: 'underline',
     fontWeight: '600',
   },
 });
