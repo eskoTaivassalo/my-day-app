@@ -55,7 +55,6 @@ export const requestNotificationPermissions = async (): Promise<boolean> => {
 
     return true;
   } catch (error) {
-    console.error('Error requesting notification permissions:', error);
     return false;
   }
 };
@@ -71,7 +70,6 @@ export const getNotificationSettings = async (): Promise<NotificationSettings> =
     }
     return DEFAULT_SETTINGS;
   } catch (error) {
-    console.error('Error getting notification settings:', error);
     return DEFAULT_SETTINGS;
   }
 };
@@ -83,7 +81,6 @@ export const saveNotificationSettings = async (settings: NotificationSettings): 
   try {
     await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(settings));
   } catch (error) {
-    console.error('Error saving notification settings:', error);
   }
 };
 
@@ -154,7 +151,6 @@ export const scheduleDailyReminders = async (settings: NotificationSettings): Pr
     }
 
   } catch (error) {
-    console.error('Error scheduling daily reminders:', error);
   }
 };
 
@@ -165,7 +161,6 @@ export const cancelAllNotifications = async (): Promise<void> => {
   try {
     await Notifications.cancelAllScheduledNotificationsAsync();
   } catch (error) {
-    console.error('Error cancelling notifications:', error);
   }
 };
 
@@ -177,7 +172,6 @@ export const getScheduledNotifications = async () => {
     const notifications = await Notifications.getAllScheduledNotificationsAsync();
     return notifications;
   } catch (error) {
-    console.error('Error getting scheduled notifications:', error);
     return [];
   }
 };
@@ -194,6 +188,5 @@ export const initializeNotifications = async (): Promise<void> => {
       await scheduleDailyReminders(settings);
     }
   } catch (error) {
-    console.error('Error initializing notifications:', error);
   }
 };

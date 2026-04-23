@@ -104,8 +104,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       setIsEditing(false);
       onUpdate?.();
       Alert.alert('Tallennettu', 'Muutokset on tallennettu');
-    } catch (error) {
-      console.error('Error saving entry:', error);
+    } catch {
       Alert.alert('Virhe', 'Tallentaminen epäonnistui');
     } finally {
       setSaving(false);
@@ -132,8 +131,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       } else {
         Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
       }
-    } catch (error) {
-      console.error('Jakaminen epäonnistui:', error);
+    } catch {
       Alert.alert('Virhe', 'Merkinnän jakaminen epäonnistui');
     }
   };
@@ -157,8 +155,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       
       setEntry(updatedEntry);
       onUpdate?.();
-    } catch (error) {
-      console.error('Error saving layout settings:', error);
+    } catch {
     }
   };
 
@@ -204,8 +201,8 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       try {
         const newImageUris = result.assets.map((asset) => asset.uri);
         const uploadedUrls = await uploadImages(newImageUris, user.uid);
-        setEditedImages([...editedImages, ...uploadedUrls]);
-      } catch (error) {
+        setEditedImages((prev) => [...prev, ...uploadedUrls]);
+      } catch {
         Alert.alert('Virhe', 'Kuvien lataus epäonnistui');
       }
     }

@@ -12,6 +12,8 @@ import {
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { getEntries } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
@@ -23,6 +25,9 @@ interface ImageItem {
 
 export default function ImageLibraryScreen({ navigation }: any) {
   const { user } = useAuth();
+  const { t } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
   const [images, setImages] = useState<ImageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -59,8 +64,8 @@ export default function ImageLibraryScreen({ navigation }: any) {
       });
 
       setImages(allImages);
-    } catch (error) {
-      console.error('Error loading image library:', error);
+    } catch {
+      setImages([]);
     } finally {
       setLoading(false);
     }
@@ -73,8 +78,8 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     if (permissionStatus === 'denied' && permissionAsked) {
       Alert.alert(
-        'Lupa vaaditaan',
-        'Kuvien tallentaminen vaatii mediakirjaston luvan. Voit myöntää luvan laitteen asetuksista.'
+        t('image_library_permission_required'),
+        t('image_library_permission_settings')
       );
       return false;
     }
@@ -90,8 +95,8 @@ export default function ImageLibraryScreen({ navigation }: any) {
     try {
       const { status } = await MediaLibrary.getPermissionsAsync();
       setPermissionStatus(status as 'granted' | 'limited' | 'denied');
-    } catch (error) {
-      console.error('Error loading media library permission:', error);
+    } catch {
+      setPermissionStatus('unknown');
     }
   };
 
@@ -109,7 +114,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
   const saveImageToLibrary = async (uri: string) => {
     const hasPermission = await ensureMediaLibraryPermission();
     if (!hasPermission) {
-      Alert.alert('Lupa vaaditaan', 'Kuvien tallentaminen vaatii mediakirjaston luvan.');
+      Alert.alert(t('image_library_permission_required'), t('image_library_permission_msg'));
       return;
     }
 
@@ -121,10 +126,9 @@ export default function ImageLibraryScreen({ navigation }: any) {
       const asset = await MediaLibrary.createAssetAsync(download.uri);
 
       await addAssetToAlbum(asset, 'MyDayApp');
-      Alert.alert('Tallennettu', 'Kuva tallennettu MyDayApp-albumiin.');
-    } catch (error) {
-      console.error('Error saving image to library:', error);
-      Alert.alert('Virhe', 'Kuvan tallennus epäonnistui.');
+      Alert.alert(t('image_library_saved_title'), t('image_library_saved_single'));
+    } catch {
+      Alert.alert(t('common_error'), t('image_library_save_failed'));
     } finally {
       setDownloading(false);
     }
@@ -144,7 +148,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     const hasPermission = await ensureMediaLibraryPermission();
     if (!hasPermission) {
-      Alert.alert('Lupa vaaditaan', 'Kuvien tallentaminen vaatii mediakirjaston luvan.');
+      Alert.alert(t('image_library_permission_required'), t('image_library_permission_msg'));
       return;
     }
 
@@ -167,16 +171,14 @@ export default function ImageLibraryScreen({ navigation }: any) {
             await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
           }
           savedCount += 1;
-        } catch (innerError) {
-          console.error('Error saving image:', innerError);
+        } catch {
         }
       }
 
-      Alert.alert('Valmis', `Tallennettu ${savedCount} kuvaa MyDayApp-albumiin.`);
+      Alert.alert(t('common_done'), t('image_library_saved_batch', { count: savedCount }));
       setSelectedUris([]);
-    } catch (error) {
-      console.error('Error saving selected images:', error);
-      Alert.alert('Virhe', 'Kuvien tallennus epäonnistui.');
+    } catch {
+      Alert.alert(t('common_error'), t('image_library_save_failed'));
     } finally {
       setDownloading(false);
     }
@@ -191,7 +193,11 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     return (
       <TouchableOpacity
-        style={[styles.imageWrapper, isSelected && styles.imageSelected]}
+        style={[
+          styles.imageWrapper,
+          { backgroundColor: isDark ? '#1E293B' : colors.gray100 },
+          isSelected && [styles.imageSelected, { borderColor: theme.colors.primary }],
+        ]}
         onPress={() => {
           if (isSelectionMode) {
             toggleSelection(item.uri);
@@ -204,7 +210,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
       >
         <Image source={{ uri: item.uri }} style={styles.image} />
         {isSelected ? (
-          <View style={styles.selectedBadge}>
+          <View style={[styles.selectedBadge, { backgroundColor: theme.colors.primary }]}>
             <Text style={styles.selectedBadgeText}>✓</Text>
           </View>
         ) : (
@@ -217,30 +223,30 @@ export default function ImageLibraryScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }] }>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }] }>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>← Takaisin</Text>
+          <Text style={[styles.backButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Kuvapankki</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('image_library_header')}</Text>
         <View style={styles.headerRight} />
       </View>
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Ladataan kuvia...</Text>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={[styles.loadingText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_loading')}</Text>
         </View>
       ) : (
         <View style={styles.listContainer}>
           {images.length > 0 && (
-            <View style={styles.selectAllBar}>
+            <View style={[styles.selectAllBar, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }]}>
               <TouchableOpacity onPress={selectAllImages}>
-                <Text style={styles.selectAllText}>Valitse kaikki</Text>
+                <Text style={[styles.selectAllText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_select_all')}</Text>
               </TouchableOpacity>
               {selectedCount > 0 && (
                 <TouchableOpacity onPress={() => setSelectedUris([])}>
-                  <Text style={styles.selectAllClear}>Tyhjennä</Text>
+                  <Text style={[styles.selectAllClear, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_clear')}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -253,8 +259,8 @@ export default function ImageLibraryScreen({ navigation }: any) {
             renderItem={renderItem}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyTitle}>Ei kuvia</Text>
-                <Text style={styles.emptySubtitle}>Lisää kuvia merkintöihin, niin ne näkyvät täällä.</Text>
+                <Text style={styles.emptyTitle}>{t('image_library_empty_title')}</Text>
+                <Text style={styles.emptySubtitle}>{t('image_library_empty_sub')}</Text>
               </View>
             }
           />
@@ -262,17 +268,17 @@ export default function ImageLibraryScreen({ navigation }: any) {
       )}
 
       {selectedCount > 0 && (
-        <View style={styles.selectionBar}>
-          <Text style={styles.selectionText}>Valittu {selectedCount} kpl</Text>
+        <View style={[styles.selectionBar, { backgroundColor: theme.colors.white, borderTopColor: theme.colors.border }]}>
+          <Text style={[styles.selectionText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_selected', { count: selectedCount })}</Text>
           <View style={styles.selectionActions}>
-            <TouchableOpacity style={styles.selectionButton} onPress={saveSelectedImages}>
-              <Text style={styles.selectionButtonText}>Tallenna valitut</Text>
+            <TouchableOpacity style={[styles.selectionButton, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }]} onPress={saveSelectedImages}>
+              <Text style={[styles.selectionButtonText, { fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_save_selected')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.selectionButton, styles.selectionClearButton]}
+              style={[styles.selectionButton, styles.selectionClearButton, { backgroundColor: isDark ? '#1E293B' : colors.gray100 }]}
               onPress={() => setSelectedUris([])}
             >
-              <Text style={styles.selectionClearText}>Tyhjennä</Text>
+              <Text style={[styles.selectionClearText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('image_library_clear')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -281,7 +287,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
       {downloading && (
         <View style={styles.downloadingOverlay}>
           <ActivityIndicator size="large" color={colors.white} />
-          <Text style={styles.downloadingText}>Tallennetaan...</Text>
+          <Text style={styles.downloadingText}>{t('image_library_saving')}</Text>
         </View>
       )}
     </View>

@@ -1,23 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Dimensions,
   Image,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { Document } from '../types/Document';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import { getEntries } from '../services/diaryService';
 import { getDocuments } from '../services/documentService';
-
-const { width } = Dimensions.get('window');
-const CALENDAR_WIDTH = width - 32;
-const DAY_WIDTH = CALENDAR_WIDTH / 7;
 
 interface CalendarDay {
   date: Date;
@@ -30,49 +28,44 @@ interface CalendarDay {
 
 export default function CalendarScreen({ navigation }: any) {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (user) {
-      loadEntries();
-    }
-  }, [user]);
-
-  // Ladataan entryt uudelleen kun palataan tähän screeniin
-  useFocusEffect(
-    React.useCallback(() => {
-      if (user) {
-        loadEntries();
-      }
-    }, [user])
-  );
-
-  useEffect(() => {
-    generateCalendar();
-  }, [currentDate, entries, documents]);
-
-  const loadEntries = async () => {
+  const loadEntries = useCallback(async () => {
     if (!user) return;
     
     try {
-      setLoading(true);
       const [fetchedEntries, fetchedDocuments] = await Promise.all([
         getEntries(user.uid),
         getDocuments(user.uid),
       ]);
       setEntries(fetchedEntries);
       setDocuments(fetchedDocuments);
-    } catch (error) {
-      console.error('Error loading entries:', error);
-    } finally {
-      setLoading(false);
+    } catch {
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    void loadEntries();
+  }, [loadEntries]);
+
+  // Ladataan entryt uudelleen kun palataan tähän screeniin
+  useFocusEffect(
+    useCallback(() => {
+      void loadEntries();
+    }, [loadEntries])
+  );
+
+  useEffect(() => {
+    generateCalendar();
+  }, [currentDate, entries, documents]);
 
   const generateCalendar = () => {
     const year = currentDate.getFullYear();
@@ -201,22 +194,44 @@ export default function CalendarScreen({ navigation }: any) {
     });
   };
 
-  const monthNames = [
-    'Tammikuu',
-    'Helmikuu',
-    'Maaliskuu',
-    'Huhtikuu',
-    'Toukokuu',
-    'Kesäkuu',
-    'Heinäkuu',
-    'Elokuu',
-    'Syyskuu',
-    'Lokakuu',
-    'Marraskuu',
-    'Joulukuu',
-  ];
+  const monthNames = useMemo(() => [
+    t('calendar_month_0'),
+    t('calendar_month_1'),
+    t('calendar_month_2'),
+    t('calendar_month_3'),
+    t('calendar_month_4'),
+    t('calendar_month_5'),
+    t('calendar_month_6'),
+    t('calendar_month_7'),
+    t('calendar_month_8'),
+    t('calendar_month_9'),
+    t('calendar_month_10'),
+    t('calendar_month_11'),
+  ], [t]);
 
-  const dayNames = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su'];
+  const dayNames = useMemo(() => [
+    t('calendar_day_0'),
+    t('calendar_day_1'),
+    t('calendar_day_2'),
+    t('calendar_day_3'),
+    t('calendar_day_4'),
+    t('calendar_day_5'),
+    t('calendar_day_6'),
+  ], [t]);
+
+  const selectedEntries = useMemo(() => {
+    if (!selectedDate) {
+      return [];
+    }
+    return getEntriesForDate(selectedDate);
+  }, [entries, selectedDate]);
+
+  const selectedDocuments = useMemo(() => {
+    if (!selectedDate) {
+      return [];
+    }
+    return getDocumentsForDate(selectedDate);
+  }, [documents, selectedDate]);
 
   const renderDay = (day: CalendarDay, index: number) => {
     const isSelected = selectedDate && isSameDay(day.date, selectedDate);
@@ -228,27 +243,28 @@ export default function CalendarScreen({ navigation }: any) {
         style={[
           styles.dayCell,
           !day.isCurrentMonth && styles.otherMonthDay,
-          isSelected && styles.selectedDay,
-          today && styles.today,
+          isSelected && [styles.selectedDay, { backgroundColor: theme.colors.primary }],
+          today && [styles.today, { backgroundColor: isDark ? '#1E293B' : '#E3F2FD' }],
         ]}
         onPress={() => handleDayPress(day)}
       >
         <Text
           style={[
             styles.dayText,
-            !day.isCurrentMonth && styles.otherMonthText,
+            { color: theme.colors.text },
+            !day.isCurrentMonth && [styles.otherMonthText, { color: theme.colors.textSecondary }],
             isSelected && styles.selectedDayText,
-            today && styles.todayText,
+            today && [styles.todayText, { color: isSelected ? '#fff' : theme.colors.primary }],
           ]}
         >
           {day.date.getDate()}
         </Text>
         <View style={styles.indicatorsContainer}>
           {day.hasEntry && (
-            <View style={styles.entryDot} />
+            <View style={[styles.entryDot, { backgroundColor: theme.colors.accent }]} />
           )}
           {day.hasDocument && (
-            <View style={styles.documentDot} />
+            <View style={[styles.documentDot, { backgroundColor: theme.colors.textSecondary }]} />
           )}
         </View>
       </TouchableOpacity>
@@ -256,47 +272,47 @@ export default function CalendarScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Kalenteri</Text>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }]}>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('calendar_header')}</Text>
       </View>
 
       {/* Month Navigator */}
-      <View style={styles.monthNavigator}>
+      <View style={[styles.monthNavigator, { backgroundColor: theme.colors.white }]}>
         <TouchableOpacity onPress={goToPreviousMonth} style={styles.navButton}>
-          <Text style={styles.navButtonText}>‹</Text>
+          <Text style={[styles.navButtonText, { color: theme.colors.primary }]}>‹</Text>
         </TouchableOpacity>
 
-        <Text style={styles.monthYearText}>
+        <Text style={[styles.monthYearText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
           {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
         </Text>
 
         <TouchableOpacity onPress={goToNextMonth} style={styles.navButton}>
-          <Text style={styles.navButtonText}>›</Text>
+          <Text style={[styles.navButtonText, { color: theme.colors.primary }]}>›</Text>
         </TouchableOpacity>
       </View>
 
       {/* Day Names */}
-      <View style={styles.dayNamesRow}>
+      <View style={[styles.dayNamesRow, { backgroundColor: theme.colors.white }]}>
         {dayNames.map((name, index) => (
           <View key={index} style={styles.dayNameCell}>
-            <Text style={styles.dayNameText}>{name}</Text>
+            <Text style={[styles.dayNameText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{name}</Text>
           </View>
         ))}
       </View>
 
       {/* Calendar Grid */}
       <ScrollView style={styles.calendarScroll}>
-        <View style={styles.calendarGrid}>
+        <View style={[styles.calendarGrid, { backgroundColor: theme.colors.white }]}>
           {calendarDays.map((day, index) => renderDay(day, index))}
         </View>
 
         {/* Selected Date Entries */}
         {selectedDate && (
-          <View style={styles.selectedDateSection}>
-            <Text style={styles.selectedDateTitle}>
-              {selectedDate.toLocaleDateString('fi-FI', {
+          <View style={[styles.selectedDateSection, { backgroundColor: theme.colors.white }] }>
+            <Text style={[styles.selectedDateTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }] }>
+              {selectedDate.toLocaleDateString(locale, {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
@@ -304,23 +320,29 @@ export default function CalendarScreen({ navigation }: any) {
               })}
             </Text>
 
-            {getEntriesForDate(selectedDate).length > 0 ? (
+            {selectedEntries.length > 0 ? (
               <View>
-                <Text style={styles.sectionTitle}>Päiväkirjamerkinnät</Text>
-                {getEntriesForDate(selectedDate).map((entry) => (
+                <Text style={[styles.sectionTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('calendar_entries')}</Text>
+                {selectedEntries.map((entry) => (
                   <TouchableOpacity
                     key={entry.id}
-                    style={styles.entryItem}
+                    style={[
+                      styles.entryItem,
+                      {
+                        backgroundColor: isDark ? '#111827' : theme.colors.white,
+                        borderColor: theme.colors.border,
+                      },
+                    ]}
                     onPress={() => handleEntryPress(entry)}
                   >
                     <View style={styles.entryItemContent}>
                       <View style={styles.entryTextContainer}>
-                        <Text style={styles.entryItemTitle}>{entry.title}</Text>
-                        <Text style={styles.entryItemPreview} numberOfLines={2}>
+                        <Text style={[styles.entryItemTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{entry.title}</Text>
+                        <Text style={[styles.entryItemPreview, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]} numberOfLines={2}>
                           {entry.content}
                         </Text>
-                        <Text style={styles.entryItemTime}>
-                          {new Date(entry.date).toLocaleTimeString('fi-FI', {
+                        <Text style={[styles.entryItemTime, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                          {new Date(entry.date).toLocaleTimeString(locale, {
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
@@ -329,7 +351,7 @@ export default function CalendarScreen({ navigation }: any) {
                       {entry.images && entry.images.length > 0 && (
                         <Image
                           source={{ uri: entry.images[0] }}
-                          style={styles.entryThumbnail}
+                          style={[styles.entryThumbnail, { backgroundColor: isDark ? '#0B1220' : '#f0f0f0' }]}
                         />
                       )}
                     </View>
@@ -338,32 +360,38 @@ export default function CalendarScreen({ navigation }: any) {
               </View>
             ) : null}
 
-            {getDocumentsForDate(selectedDate).length > 0 ? (
-              <View style={{ marginTop: getEntriesForDate(selectedDate).length > 0 ? 16 : 0 }}>
-                <Text style={styles.sectionTitle}>Dokumentit</Text>
-                {getDocumentsForDate(selectedDate).map((doc) => (
+            {selectedDocuments.length > 0 ? (
+              <View style={{ marginTop: selectedEntries.length > 0 ? 16 : 0 }}>
+                <Text style={[styles.sectionTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('calendar_documents')}</Text>
+                {selectedDocuments.map((doc) => (
                   <TouchableOpacity
                     key={doc.id}
-                    style={styles.documentItem}
+                    style={[
+                      styles.documentItem,
+                      {
+                        backgroundColor: isDark ? '#111827' : '#F9FAFB',
+                        borderColor: theme.colors.border,
+                      },
+                    ]}
                     onPress={() => handleDocumentPress(doc)}
                   >
                     <View style={styles.documentItemContent}>
                       <View style={styles.documentTextContainer}>
-                        <Text style={styles.documentItemTitle}>{doc.title}</Text>
+                        <Text style={[styles.documentItemTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{doc.title}</Text>
                         {doc.description && (
-                          <Text style={styles.documentItemDescription} numberOfLines={2}>
+                          <Text style={[styles.documentItemDescription, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]} numberOfLines={2}>
                             {doc.description}
                           </Text>
                         )}
                         <View style={styles.documentMeta}>
-                          <Text style={styles.documentCategory}>
-                            {doc.category === 'receipt' && '🧾 Kuitti'}
-                            {doc.category === 'contract' && '📄 Sopimus'}
-                            {doc.category === 'invoice' && '💰 Lasku'}
-                            {doc.category === 'certificate' && '🏆 Todistus'}
-                            {doc.category === 'other' && '📎 Muu'}
+                          <Text style={[styles.documentCategory, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                            {doc.category === 'receipt' && t('doc_category_receipt')}
+                            {doc.category === 'contract' && t('doc_category_contract')}
+                            {doc.category === 'invoice' && t('doc_category_invoice')}
+                            {doc.category === 'certificate' && t('doc_category_certificate')}
+                            {doc.category === 'other' && t('doc_category_other')}
                           </Text>
-                          <Text style={styles.documentType}>
+                          <Text style={[styles.documentType, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }] }>
                             {doc.fileType.toUpperCase()}
                           </Text>
                         </View>
@@ -371,7 +399,7 @@ export default function CalendarScreen({ navigation }: any) {
                       {doc.thumbnailUrl && (
                         <Image
                           source={{ uri: doc.thumbnailUrl }}
-                          style={styles.documentThumbnail}
+                          style={[styles.documentThumbnail, { backgroundColor: isDark ? '#0B1220' : '#e0e0e0' }]}
                         />
                       )}
                     </View>
@@ -380,9 +408,9 @@ export default function CalendarScreen({ navigation }: any) {
               </View>
             ) : null}
 
-            {getEntriesForDate(selectedDate).length === 0 && 
-             getDocumentsForDate(selectedDate).length === 0 && (
-              <Text style={styles.noEntriesText}>Ei merkintöjä tai dokumentteja tältä päivältä</Text>
+            {selectedEntries.length === 0 && 
+             selectedDocuments.length === 0 && (
+              <Text style={[styles.noEntriesText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('calendar_empty')}</Text>
             )}
           </View>
         )}
@@ -435,7 +463,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   dayNameCell: {
-    width: DAY_WIDTH,
+    flex: 1,
     alignItems: 'center',
   },
   dayNameText: {
@@ -453,8 +481,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   dayCell: {
-    width: DAY_WIDTH,
-    height: DAY_WIDTH,
+    width: '14.2857%',
+    aspectRatio: 1,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',

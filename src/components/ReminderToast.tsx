@@ -6,6 +6,7 @@ import {
   Animated,
   TouchableOpacity,
 } from 'react-native';
+import { useLanguage } from '../contexts/LanguageContext';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
 
 interface ReminderToastProps {
@@ -16,6 +17,7 @@ interface ReminderToastProps {
 }
 
 export default function ReminderToast({ title, message, visible, onHide }: ReminderToastProps) {
+  const { t } = useLanguage();
   const translateY = useRef(new Animated.Value(-200)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.8)).current;
@@ -104,7 +106,7 @@ export default function ReminderToast({ title, message, visible, onHide }: Remin
           <Text style={styles.icon}>⏰</Text>
         </Animated.View>
         <View style={styles.content}>
-          <Text style={styles.badge}>Muistutukset tänään</Text>
+          <Text style={styles.badge}>{t('timeline_reminders_today')}</Text>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
         </View>

@@ -11,16 +11,22 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import AppLogo from '../components/AppLogo';
 
 export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { signIn, signInWithGoogle } = useAuth();
+  const { t } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Virhe', 'Täytä kaikki kentät');
+      Alert.alert(t('common_error'), t('common_fill_all_fields'));
       return;
     }
 
@@ -29,7 +35,7 @@ export default function LoginScreen({ navigation }: any) {
       await signIn(email, password);
       // Navigation happens automatically when auth state changes
     } catch (error: any) {
-      Alert.alert('Kirjautuminen epäonnistui', error.message);
+      Alert.alert(t('login_failed'), error.message);
     } finally {
       setLoading(false);
     }
@@ -40,7 +46,7 @@ export default function LoginScreen({ navigation }: any) {
     try {
       await signInWithGoogle();
     } catch (error: any) {
-      Alert.alert('Google-kirjautuminen epäonnistui', error.message);
+      Alert.alert(t('login_google_failed'), error.message);
     } finally {
       setLoading(false);
     }
@@ -48,23 +54,30 @@ export default function LoginScreen({ navigation }: any) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.content}>
         {/* Logo/Title */}
         <View style={styles.header}>
-          <Text style={styles.logo}>📖</Text>
-          <Text style={styles.title}>My Day</Text>
-          <Text style={styles.subtitle}>Päiväkirjasovellus</Text>
+          <AppLogo showWordmark={false} />
+          <Text style={[styles.title, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>My days</Text>
         </View>
 
         {/* Login Form */}
         <View style={styles.form}>
           <TextInput
-            style={styles.input}
-            placeholder="Sähköposti"
-            placeholderTextColor="#999"
+            style={[
+              styles.input,
+              {
+                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={t('login_email_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"
@@ -73,9 +86,17 @@ export default function LoginScreen({ navigation }: any) {
           />
 
           <TextInput
-            style={styles.input}
-            placeholder="Salasana"
-            placeholderTextColor="#999"
+            style={[
+              styles.input,
+              {
+                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={t('login_password_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
@@ -84,37 +105,37 @@ export default function LoginScreen({ navigation }: any) {
           />
 
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[styles.button, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }, loading && styles.buttonDisabled]}
             onPress={handleLogin}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Kirjaudu sisään</Text>
+              <Text style={[styles.buttonText, { fontFamily: theme.fonts.bodyFamily }]}>{t('login_button')}</Text>
             )}
           </TouchableOpacity>
 
           {/* Divider */}
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>tai</Text>
+            <Text style={[styles.dividerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('login_or_divider')}</Text>
             <View style={styles.dividerLine} />
           </View>
 
           {/* Google Sign In */}
           <TouchableOpacity
-            style={styles.googleButton}
+            style={[styles.googleButton, { backgroundColor: theme.colors.white, borderColor: theme.colors.border }]}
             onPress={handleGoogleSignIn}
           >
-            <Text style={styles.googleButtonText}>🔍 Kirjaudu Google-tilillä</Text>
+            <Text style={[styles.googleButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('login_google_button')}</Text>
           </TouchableOpacity>
 
           {/* Sign Up Link */}
           <View style={styles.footer}>
-            <Text style={styles.footerText}>Eikö sinulla ole tiliä? </Text>
+            <Text style={[styles.footerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('login_no_account')}</Text>
             <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-              <Text style={styles.linkText}>Rekisteröidy</Text>
+              <Text style={[styles.linkText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('login_register_link')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -137,19 +158,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 48,
   },
-  logo: {
-    fontSize: 80,
-    marginBottom: 16,
-  },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
+    fontSize: 30,
+    fontWeight: '600',
+    fontStyle: 'italic',
+    fontFamily: Platform.select({
+      ios: 'Snell Roundhand',
+      android: 'cursive',
+      default: undefined,
+    }),
     color: '#333',
+    marginTop: 12,
     marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
   },
   form: {
     width: '100%',
@@ -186,7 +206,7 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: '#d1d5db',
   },
   dividerText: {
     marginHorizontal: 16,

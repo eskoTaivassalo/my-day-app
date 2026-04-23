@@ -2,6 +2,14 @@
  * Design System - Yhtenäiset tyylit koko sovellukselle
  */
 
+import { Platform } from 'react-native';
+
+const scriptFontFamily = Platform.select({
+  ios: 'Snell Roundhand',
+  android: 'cursive',
+  default: undefined,
+});
+
 export const colors = {
   // Primary colors - Päiväkirjan pehmeä violetti/sininen teema
   primary: '#6366F1', // Indigo
@@ -186,14 +194,18 @@ export const commonStyles = {
   // Text styles
   heading1: {
     fontSize: typography.fontSizes.xxxl,
-    fontWeight: typography.fontWeights.bold,
+    fontWeight: typography.fontWeights.semibold,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.text,
     lineHeight: typography.fontSizes.xxxl * typography.lineHeights.tight,
   },
   
   heading2: {
     fontSize: typography.fontSizes.xxl,
-    fontWeight: typography.fontWeights.bold,
+    fontWeight: typography.fontWeights.semibold,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.text,
     lineHeight: typography.fontSizes.xxl * typography.lineHeights.tight,
   },
@@ -201,6 +213,8 @@ export const commonStyles = {
   heading3: {
     fontSize: typography.fontSizes.xl,
     fontWeight: typography.fontWeights.semibold,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.text,
     lineHeight: typography.fontSizes.xl * typography.lineHeights.normal,
   },
@@ -208,6 +222,8 @@ export const commonStyles = {
   body: {
     fontSize: typography.fontSizes.md,
     fontWeight: typography.fontWeights.regular,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.text,
     lineHeight: typography.fontSizes.md * typography.lineHeights.normal,
   },
@@ -215,6 +231,8 @@ export const commonStyles = {
   bodySecondary: {
     fontSize: typography.fontSizes.sm,
     fontWeight: typography.fontWeights.regular,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.textSecondary,
     lineHeight: typography.fontSizes.sm * typography.lineHeights.normal,
   },
@@ -222,6 +240,8 @@ export const commonStyles = {
   caption: {
     fontSize: typography.fontSizes.xs,
     fontWeight: typography.fontWeights.regular,
+    fontStyle: 'italic' as const,
+    fontFamily: scriptFontFamily,
     color: colors.textLight,
     lineHeight: typography.fontSizes.xs * typography.lineHeights.normal,
   },

@@ -8,6 +8,8 @@ import {
   GoogleAuthProvider,
   signInWithCredential,
   deleteUser,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
 } from 'firebase/auth';
 import { collection, query, where, getDocs, deleteDoc, doc, setDoc, getDoc, Timestamp } from 'firebase/firestore';
 import { ref, listAll, deleteObject } from 'firebase/storage';
@@ -45,7 +47,7 @@ interface AuthContextType {
   unlockWithPassphrase: (passphrase: string) => Promise<boolean>;
   changeEncryptionPassphrase: (newPassphrase: string) => Promise<void>;
   logout: () => Promise<void>;
-  deleteAccount: () => Promise<void>;
+  deleteAccount: (password?: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -56,7 +58,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [encryptionStatus, setEncryptionStatus] = useState<EncryptionStatus>('loading');
 
   useEffect(() => {
-    console.log('🔐 [AuthContext] Initializing auth...');
     let isMounted = true;
 
     // Try to restore user from AsyncStorage first
@@ -64,11 +65,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
         if (savedUser && isMounted) {
-          console.log('🔐 [AuthContext] Found saved user in AsyncStorage');
           // User restored
         }
       } catch (error) {
-        console.error('❌ [AuthContext] Error restoring user:', error);
       }
     };
 
@@ -78,14 +77,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!isMounted) return;
       
-      console.log(`🔐 [AuthContext] Auth state changed: ${firebaseUser ? `logged in as ${firebaseUser.email}` : 'logged out'}`);
       setUser(firebaseUser);
       setLoading(false);
 
       // Save/remove user in AsyncStorage
       try {
         if (firebaseUser) {
-          console.log(`🔐 [AuthContext] Saving user to AsyncStorage: ${firebaseUser.email}`);
           await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({
             uid: firebaseUser.uid,
             email: firebaseUser.email,
@@ -95,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await AsyncStorage.removeItem(AUTH_USER_KEY);
         }
       } catch (error) {
-        console.error('Error saving user to AsyncStorage:', error);
       }
 
       // Varmista että kirjautuneella käyttäjällä on Firestore-dokumentti
@@ -111,16 +107,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (loaded) {
             setEncryptionStatus('ready');
           } else {
-            // Uusi laite tai SecureStore tyhjennetty — tarkista onko avain Firestoressa
-            const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
-            if (snap.exists() && snap.data().encryptedMasterKey) {
-              setEncryptionStatus('needs_passphrase');
-            } else {
-              setEncryptionStatus('needs_setup');
-            }
+            // Uusi laite tai SecureStore tyhjennetty.
+            // Aseta tila heti, jotta UI ei odota verkkoa käynnistyspolulla.
+            setEncryptionStatus('needs_passphrase');
+
+            // Tarkennetaan taustalla onko kyseessä setup-vaihe.
+            void getDoc(doc(db, 'users', firebaseUser.uid))
+              .then((snap) => {
+                if (!snap.exists() || !snap.data().encryptedMasterKey) {
+                  setEncryptionStatus('needs_setup');
+                }
+              })
+              .catch(() => {
+                // Pidä needs_passphrase fallbackina verkkovirheissä.
+              });
           }
         } catch (error) {
-          console.error('Error loading encryption key on restart:', error);
           setEncryptionStatus('needs_passphrase');
         }
 
@@ -139,7 +141,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
           }
         } catch (error) {
-          console.error('Error ensuring user document:', error);
         }
       }
     });
@@ -154,6 +155,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       _activeSignInInProgress = true;
       const cred = await signInWithEmailAndPassword(auth, email, password);
+
+      // Fast-path: jos avain löytyy laitteelta, älä tee verkko+PBKDF2-kierrosta.
+      const loadedFromDevice = await tryLoadKeyFromDevice(cred.user.uid);
+      if (loadedFromDevice) {
+        setEncryptionStatus('ready');
+        return;
+      }
+
       // Lataa salausavain — sähköpostisalasana = päiväkirjan salafraasi
       const result = await loadEncryptionKey(cred.user.uid, password);
       if (result === 'setup_needed') {
@@ -167,7 +176,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setEncryptionStatus('ready');
       }
     } catch (error: any) {
-      console.error('Sign in error:', error);
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
@@ -192,7 +200,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await setupNewEncryptionKey(credential.user.uid, password);
       setEncryptionStatus('ready');
     } catch (error: any) {
-      console.error('Sign up error:', error);
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
@@ -255,7 +262,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Authentication cancelled or failed');
       }
     } catch (error: any) {
-      console.error('Google Sign-In error:', error);
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
@@ -292,12 +298,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setEncryptionStatus('loading');
       await signOut(auth);
     } catch (error: any) {
-      console.error('Logout error:', error);
       throw new Error(error.message);
     }
   };
 
-  const deleteAccount = async () => {
+  const deleteAccount = async (password?: string) => {
     try {
       const currentUser = auth.currentUser;
       if (!currentUser) {
@@ -305,6 +310,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const userId = currentUser.uid;
+      const providerId = currentUser.providerData?.[0]?.providerId;
+
+      // Varmista tuore kirjautuminen ENNEN datan poistoa.
+      if (providerId === 'password') {
+        if (!currentUser.email) {
+          throw new Error('Käyttäjän sähköpostia ei löytynyt uudelleenkirjautumista varten.');
+        }
+        if (!password) {
+          throw new Error('Syötä salasanasi tilin poistamista varten.');
+        }
+
+        const credential = EmailAuthProvider.credential(currentUser.email, password);
+        await reauthenticateWithCredential(currentUser, credential);
+      }
 
       // 1. Poista kaikki diary_entries
       const entriesQuery = query(
@@ -368,8 +387,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // 8. Tyhjennä AsyncStorage
       await AsyncStorage.removeItem(AUTH_USER_KEY);
     } catch (error: any) {
-      console.error('Tilin poisto virhe:', error);
-      throw new Error(error.message);
+
+      if (error?.code === 'auth/wrong-password' || error?.code === 'auth/invalid-credential') {
+        throw new Error('Väärä salasana. Tarkista salasana ja yritä uudelleen.');
+      }
+      if (error?.code === 'auth/requires-recent-login') {
+        throw new Error('Turvallisuussyistä kirjaudu uudelleen sisään ja yritä sitten tilin poistoa uudestaan.');
+      }
+
+      throw new Error(error?.message || 'Tilin poistaminen epäonnistui.');
     }
   };
 

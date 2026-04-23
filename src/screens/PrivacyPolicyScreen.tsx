@@ -7,156 +7,133 @@ import {
   TouchableOpacity,
   SafeAreaView,
 } from 'react-native';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 
 interface Section {
   title: string;
   content: string;
 }
 
-const sections: Section[] = [
-  {
-    title: '1. Rekisterinpitäjä',
-    content:
-      'My Day -päiväkirjasovelluksen rekisterinpitäjä on sovelluksen kehittäjä. ' +
-      'Rekisterinpitäjä vastaa henkilötietojen käsittelystä EU:n yleisen tietosuoja-asetuksen ' +
-      '(GDPR, 2016/679) mukaisesti.',
+const policyByLanguage: Record<'fi' | 'en' | 'sv', { title: string; subtitle: string; updated: string; summaryTitle: string; summaryText: string; footer: string; sections: Section[] }> = {
+  fi: {
+    title: 'Tietosuojaseloste',
+    subtitle: 'My days -paivakirjasovellus · GDPR',
+    updated: 'Paivitetty',
+    summaryTitle: '🔒 Tietoturvatiivistelma',
+    summaryText:
+      'Kaikki kirjoittamasi tekstit salataan laitteellasi ennen tallennusta. Salausavain on vain laitteessasi - edes kehittaja ei pysty lukemaan sisaltojasi.',
+    footer:
+      'Tama tietosuojaseloste on laadittu EU:n yleisen tietosuoja-asetuksen (GDPR 2016/679) vaatimusten mukaisesti.',
+    sections: [
+      { title: '1. Rekisterinpita ja', content: 'My days -sovelluksen rekisterinpita ja on sovelluksen kehittaja. Henkilotietojen kasittely tapahtuu GDPR:n mukaisesti.' },
+      { title: '2. Kerattavat tiedot', content: 'Kerattavat tiedot voivat sisaltaa sahkopostin, merkintojen sisallon, kuvat/videot, dokumentit, valinnaisen sijainnin ja profiilikuvan.' },
+      { title: '3. Kayttotarkoitus', content: 'Tietoja kaytetaan vain sovelluksen toimintoihin: kirjautuminen, merkintojen hallinta, media- ja dokumenttien kasittely.' },
+      { title: '4. Salaus', content: 'Arkaluonteinen data salataan laitteella ennen lahetysta. Salausavain pysyy laitteessa (zero-knowledge).' },
+      { title: '5. Tallennus ja kolmannet osapuolet', content: 'Data tallennetaan Firebase-palveluihin GDPR-vaatimusten mukaisesti. Sisalto on salattua.' },
+      { title: '6. Sailytusaika', content: 'Tietoja sailytetaan tilin olemassaolon ajan. Tilin poistossa data poistetaan pysyvasti.' },
+      { title: '7. Oikeutesi', content: 'Sinulla on GDPR-oikeudet: tarkastus, oikaisu, poistaminen, vastustaminen ja siirto.' },
+      { title: '8. Seuranta', content: 'Sovellus ei kayta analytiikkaseurantaa markkinointiin. Turvalokit voivat kerty a kirjautumisesta.' },
+      { title: '9. Alaikaiset', content: 'Sovellus ei ole tarkoitettu alle 16-vuotiaille.' },
+      { title: '10. Muutokset', content: 'Tietosuojaselostetta voidaan paivittaa. Merkittavista muutoksista ilmoitetaan sovelluksessa.' },
+      { title: '11. Yhteystiedot', content: 'Tietosuoja-asioissa voit olla yhteydessa kehittajaan tai valvovaan viranomaiseen.' },
+    ],
   },
-  {
-    title: '2. Kerättävät tiedot',
-    content:
-      'Sovellus kerää ja käsittelee seuraavia tietoja:\n\n' +
-      '• Sähköpostiosoite (kirjautumista varten)\n' +
-      '• Päiväkirjamerkinnät: otsikko, sisältö, päivämäärä\n' +
-      '• Valokuvat ja videot, jotka käyttäjä itse lisää merkintöihin\n' +
-      '• Dokumentit (PDF, DOCX yms.), jotka käyttäjä itse lisää\n' +
-      '• Valinnainen sijaintitieto merkinnöissä\n' +
-      '• Profiilikuva (valinnainen)',
+  en: {
+    title: 'Privacy Policy',
+    subtitle: 'My days diary app · GDPR',
+    updated: 'Updated',
+    summaryTitle: '🔒 Security Summary',
+    summaryText:
+      'All diary text is encrypted on your device before storage. The encryption key remains on your device only; even the developer cannot read your private content.',
+    footer:
+      'This privacy policy is prepared in accordance with EU General Data Protection Regulation (GDPR 2016/679).',
+    sections: [
+      { title: '1. Data Controller', content: 'The data controller is the app developer, responsible for personal data processing under GDPR.' },
+      { title: '2. Data We Collect', content: 'Data may include email address, diary content, user-added photos/videos/documents, optional location, and profile image.' },
+      { title: '3. Purpose of Processing', content: 'Data is used only to provide core app functionality: authentication, diary storage, and media/document management.' },
+      { title: '4. End-to-End Encryption', content: 'Sensitive content is encrypted on your device before upload. The encryption key is kept only on your device (zero-knowledge).' },
+      { title: '5. Storage and Processors', content: 'Data is stored using Firebase services under GDPR-compliant terms. Encrypted content is not readable by third parties.' },
+      { title: '6. Retention', content: 'Data is retained while the account exists. Account deletion removes related data permanently.' },
+      { title: '7. Your Rights', content: 'You have GDPR rights including access, rectification, erasure, objection, and portability.' },
+      { title: '8. Tracking', content: 'The app does not use behavioral analytics for marketing. Security logs related to authentication may be collected.' },
+      { title: '9. Minors', content: 'The app is not intended for users under 16 years old.' },
+      { title: '10. Policy Changes', content: 'This policy may be updated from time to time. Material changes are communicated in the app.' },
+      { title: '11. Contact', content: 'For privacy questions, contact the app developer or your local data protection authority.' },
+    ],
   },
-  {
-    title: '3. Tietojen käyttötarkoitus',
-    content:
-      'Tietoja käytetään ainoastaan sovelluksen perustoimintojen tarjoamiseen:\n\n' +
-      '• Käyttäjän tunnistautuminen\n' +
-      '• Päiväkirjamerkintöjen tallentaminen ja näyttäminen\n' +
-      '• Dokumenttien ja kuvien hallinta\n\n' +
-      'Tietoja ei käytetä markkinointiin, profilointiin eikä myydä kolmansille osapuolille.',
+  sv: {
+    title: 'Integritetspolicy',
+    subtitle: 'My days dagboksapp · GDPR',
+    updated: 'Uppdaterad',
+    summaryTitle: '🔒 Sakerhetssammanfattning',
+    summaryText:
+      'All text du skriver krypteras pa din enhet innan lagring. Krypteringsnyckeln stannar pa enheten; inte ens utvecklaren kan lasa privat innehall.',
+    footer:
+      'Denna integritetspolicy har upprattats enligt EU:s dataskyddsforordning (GDPR 2016/679).',
+    sections: [
+      { title: '1. Personuppgiftsansvarig', content: 'Appens utvecklare ar personuppgiftsansvarig och behandlar data enligt GDPR.' },
+      { title: '2. Uppgifter som samlas in', content: 'Uppgifter kan omfatta e-post, dagboksinnehall, anvandarens bilder/videor/dokument, valfri plats och profilbild.' },
+      { title: '3. Andamal', content: 'Uppgifterna anvands endast for appens grundfunktioner: inloggning, lagring av anteckningar och hantering av media/dokument.' },
+      { title: '4. End-to-end-kryptering', content: 'Kansligt innehall krypteras pa enheten fore uppladdning. Nyckeln finns endast pa din enhet (zero-knowledge).' },
+      { title: '5. Lagring och parter', content: 'Data lagras via Firebase enligt GDPR-kompatibla villkor. Krypterat innehall ar inte lasbart for tredje part.' },
+      { title: '6. Lagringstid', content: 'Data sparas sa lange kontot finns. Nar kontot tas bort raderas data permanent.' },
+      { title: '7. Dina rattigheter', content: 'Du har GDPR-rattigheter inklusive tillgang, rattelse, radering, invandning och dataportabilitet.' },
+      { title: '8. Sparning', content: 'Appen anvander inte beteendeanalys for marknadsforing. Sakerhetsloggar kring autentisering kan forekomma.' },
+      { title: '9. Minderariga', content: 'Appen ar inte avsedd for personer under 16 ar.' },
+      { title: '10. Andringar', content: 'Policyn kan uppdateras over tid. Vasentliga andringar meddelas i appen.' },
+      { title: '11. Kontakt', content: 'For integritetsfragor, kontakta utvecklaren eller relevant dataskyddsmyndighet.' },
+    ],
   },
-  {
-    title: '4. End-to-End -salaus ja Zero-Knowledge -periaate',
-    content:
-      'Kaikki arkaluonteiset tiedot salataan laitteellasi ennen kuin ne lähetetään palvelimelle:\n\n' +
-      '• Päiväkirjamerkintöjen otsikot ja tekstisisältö salataan\n' +
-      '• Dokumenttien otsikot ja kuvaukset salataan\n' +
-      '• Sijaintitiedot (osoitteet) salataan\n\n' +
-      'Salausavain on tallennettu VAIN laitteesi suojattuun tallennukseen ' +
-      '(iOS: Keychain, Android: Keystore). Avain ei koskaan lähde laitteeltasi.\n\n' +
-      '⚠️ Tämä tarkoittaa, että:\n' +
-      '• Edes sovelluksen kehittäjä ei pysty lukemaan sisältöjäsi\n' +
-      '• Jos vaihdat laitetta, salattua sisältöä ei voi siirtää (v1)\n' +
-      '• Jos poistat tilin, kaikki data poistetaan pysyvästi',
-  },
-  {
-    title: '5. Tietojen säilytys ja kolmannet osapuolet',
-    content:
-      'Tiedot tallennetaan Google Firebase -palveluihin (Firestore ja Cloud Storage), ' +
-      'jotka sijaitsevat EU:n alueella tai EU:n tietosuojavaatimusten piirissä.\n\n' +
-      'Google Firebase toimii henkilötietojen käsittelijänä, jonka kanssa on tehty ' +
-      'tietojenkäsittelysopimus (DPA) GDPR:n vaatimusten mukaisesti.\n\n' +
-      'Googlen tietosuojaseloste: https://policies.google.com/privacy\n\n' +
-      'Firebase-palvelimille tallennettu data on salattu (end-to-end), joten ' +
-      'Google tai sovelluksen kehittäjä ei pysty lukemaan sen sisältöä.',
-  },
-  {
-    title: '6. Tietojen säilytysaika',
-    content:
-      'Tietoja säilytetään niin kauan kuin käyttäjätili on olemassa. ' +
-      'Kun käyttäjä poistaa tilinsä, kaikki tiedot poistetaan välittömästi ja pysyvästi:\n\n' +
-      '• Kaikki Firestore-dokumentit\n' +
-      '• Kaikki tallennetut kuvat, videot ja dokumentit\n' +
-      '• Käyttäjäprofiili\n' +
-      '• Salausavain laitteelta',
-  },
-  {
-    title: '7. Käyttäjän oikeudet (GDPR)',
-    content:
-      'EU:n tietosuoja-asetuksen mukaan sinulla on seuraavat oikeudet:\n\n' +
-      '• Oikeus saada tiedot (Art. 15): Näet kaikki tietosi sovelluksen kautta\n' +
-      '• Oikeus oikaista tiedot (Art. 16): Voit muokata merkintöjäsi sovelluksessa\n' +
-      '• Oikeus tulla unohdetuksi (Art. 17): Poista tili Asetukset-näkymästä\n' +
-      '• Oikeus tietojen siirtämiseen (Art. 20): Voit viedä merkintäsi (tulossa)\n' +
-      '• Oikeus vastustaa käsittelyä (Art. 21): Voit poistaa tilisi koska tahansa\n\n' +
-      'Kaikki oikeudet ovat käytettävissä suoraan sovelluksessa.',
-  },
-  {
-    title: '8. Evästeet ja seuranta',
-    content:
-      'Sovellus ei käytä evästeitä eikä seuraa käyttäjien käyttäytymistä analytiikan ' +
-      'avulla. Firebase Authentication kerää kirjautumisiin liittyvät lokitiedot ' +
-      'tietoturvan ja väärinkäytösten havaitsemisen vuoksi.',
-  },
-  {
-    title: '9. Alaikäiset',
-    content:
-      'Sovellus ei ole tarkoitettu alle 16-vuotiaille. Emme tietoisesti kerää ' +
-      'alaikäisten henkilötietoja.',
-  },
-  {
-    title: '10. Muutokset tietosuojaselosteeseen',
-    content:
-      'Voimme päivittää tätä tietosuojaselostetta ajoittain. ' +
-      'Merkittävistä muutoksista ilmoitetaan sovelluksen kautta. ' +
-      'Jatkamalla sovelluksen käyttöä muutosten jälkeen hyväksyt päivitetyn selosteen.',
-  },
-  {
-    title: '11. Yhteystiedot',
-    content:
-      'Tietosuoja-asioissa voit ottaa yhteyttä sovelluksen kehittäjään. ' +
-      'Sinulla on myös oikeus tehdä valitus tietosuojaviranomaiselle ' +
-      '(Suomessa: Tietosuojavaltuutetun toimisto, www.tietosuoja.fi).',
-  },
-];
+};
 
 export default function PrivacyPolicyScreen({ navigation }: any) {
+  const { language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
+  const policy = policyByLanguage[language];
+  const updatedDate = new Date(2026, 3, 3).toLocaleDateString(locale, {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+  });
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+      <View style={[styles.header, { borderBottomColor: theme.colors.border, backgroundColor: theme.colors.white }]}>
         {navigation && (
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backText}>← Takaisin</Text>
+            <Text style={[styles.backText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{language === 'en' ? '← Back' : language === 'sv' ? '← Tillbaka' : '← Takaisin'}</Text>
           </TouchableOpacity>
         )}
-        <Text style={styles.headerTitle}>Tietosuojaseloste</Text>
-        <Text style={styles.headerSubtitle}>My Day -päiväkirjasovellus · GDPR</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{policy.title}</Text>
+        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{policy.subtitle}</Text>
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {/* Päivitetty */}
         <View style={styles.updated}>
-          <Text style={styles.updatedText}>📅 Päivitetty: 3.4.2026</Text>
+          <Text style={[styles.updatedText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>📅 {policy.updated}: {updatedDate}</Text>
         </View>
 
         {/* Tiivistelmä */}
-        <View style={styles.summary}>
-          <Text style={styles.summaryTitle}>🔒 Tietoturvatiivistelmä</Text>
-          <Text style={styles.summaryText}>
-            Kaikki kirjoittamasi tekstit salataan laitteellasi ennen tallennusta.
-            Salausavain on vain laitteessasi — edes kehittäjä ei pysty lukemaan sisältöjäsi.
-          </Text>
+        <View style={[styles.summary, { backgroundColor: isDark ? '#0B1220' : '#EFF6FF', borderLeftColor: theme.colors.primary }] }>
+          <Text style={[styles.summaryTitle, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{policy.summaryTitle}</Text>
+          <Text style={[styles.summaryText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{policy.summaryText}</Text>
         </View>
 
         {/* Osiot */}
-        {sections.map((section, index) => (
+        {policy.sections.map((section, index) => (
           <View key={index} style={styles.section}>
-            <Text style={styles.sectionTitle}>{section.title}</Text>
-            <Text style={styles.sectionContent}>{section.content}</Text>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{section.title}</Text>
+            <Text style={[styles.sectionContent, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{section.content}</Text>
           </View>
         ))}
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            Tämä tietosuojaseloste on laadittu EU:n yleisen tietosuoja-asetuksen
-            (GDPR 2016/679) vaatimusten mukaisesti.
-          </Text>
+        <View style={[styles.footer, { borderTopColor: theme.colors.border }] }>
+          <Text style={[styles.footerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{policy.footer}</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

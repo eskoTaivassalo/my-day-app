@@ -18,6 +18,25 @@ import { encryptText, decryptText, encryptBytes, decryptBytes } from './encrypti
 
 const DOCUMENTS_COLLECTION = 'documents';
 const DECRYPTED_DOCUMENT_CACHE_DIR = `${FileSystem.cacheDirectory}decrypted_documents/`;
+const DOCUMENT_ENCRYPTION_VERSION = 2;
+
+const safeDecryptText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  try {
+    return decryptText(value);
+  } catch {
+    return value;
+  }
+};
+
+const encryptTags = (tags: string[]): string[] => tags.map((tag) => encryptText(tag));
+
+const decryptTags = (tags: unknown): string[] => {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .filter((tag): tag is string => typeof tag === 'string')
+    .map((tag) => safeDecryptText(tag));
+};
 
 const ensureDecryptedDocumentCacheDir = async (): Promise<void> => {
   const dirInfo = await FileSystem.getInfoAsync(DECRYPTED_DOCUMENT_CACHE_DIR);
@@ -87,7 +106,6 @@ export const getDecryptedDocumentUri = async (
 
     return localPath;
   } catch (error) {
-    console.error('Error decrypting document file:', error);
     return fileUrl;
   }
 };
@@ -146,7 +164,6 @@ export const uploadDocumentFile = async (
 
     return downloadUrl;
   } catch (error) {
-    console.error('Error uploading document:', error);
     throw error;
   }
 };
@@ -163,14 +180,15 @@ export const createDocument = async (
     const docData: any = {
       userId,
       title: encryptText(document.title),          // Salattu
-      category: document.category,
-      fileUrl: document.fileUrl,
-      fileName: document.fileName,
+      category: encryptText(document.category),
+      fileUrl: encryptText(document.fileUrl),
+      fileName: encryptText(document.fileName),
       fileType: document.fileType,
       fileSize: document.fileSize,
       date: Timestamp.fromDate(document.date),
-      tags: document.tags,
+      tags: encryptTags(document.tags),
       _encrypted: true,
+      _encryptionVersion: DOCUMENT_ENCRYPTION_VERSION,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
@@ -187,7 +205,6 @@ export const createDocument = async (
 
     return docRef.id;
   } catch (error) {
-    console.error('Error creating document:', error);
     throw error;
   }
 };
@@ -209,22 +226,26 @@ export const getDocuments = async (userId: string): Promise<Document[]> => {
     querySnapshot.forEach((doc) => {
       const data = doc.data();
       const isEncrypted = data._encrypted === true;
+      const encryptionVersion = typeof data._encryptionVersion === 'number'
+        ? data._encryptionVersion
+        : 1;
+      const hasEncryptedMetadata = isEncrypted && encryptionVersion >= DOCUMENT_ENCRYPTION_VERSION;
 
       documents.push({
         id: doc.id,
         userId: data.userId,
-        title: isEncrypted ? decryptText(data.title) : data.title,
+        title: isEncrypted ? safeDecryptText(data.title) : data.title,
         description: data.description
-          ? isEncrypted ? decryptText(data.description) : data.description
+          ? isEncrypted ? safeDecryptText(data.description) : data.description
           : undefined,
-        category: data.category,
-        fileUrl: data.fileUrl,
-        fileName: data.fileName,
+        category: hasEncryptedMetadata ? safeDecryptText(data.category) as Document['category'] : data.category,
+        fileUrl: hasEncryptedMetadata ? safeDecryptText(data.fileUrl) : data.fileUrl,
+        fileName: hasEncryptedMetadata ? safeDecryptText(data.fileName) : data.fileName,
         fileType: data.fileType,
         fileSize: data.fileSize,
         thumbnailUrl: data.thumbnailUrl,
         date: data.date.toDate(),
-        tags: data.tags || [],
+        tags: hasEncryptedMetadata ? decryptTags(data.tags) : (data.tags || []),
         createdAt: data.createdAt.toDate(),
         updatedAt: data.updatedAt.toDate(),
       });
@@ -232,7 +253,6 @@ export const getDocuments = async (userId: string): Promise<Document[]> => {
 
     return documents;
   } catch (error) {
-    console.error('Error getting documents:', error);
     throw error;
   }
 };
@@ -246,12 +266,34 @@ export const updateDocument = async (
 ): Promise<void> => {
   try {
     const docRef = doc(db, DOCUMENTS_COLLECTION, documentId);
-    await updateDoc(docRef, {
+    const encryptedUpdates: any = {
       ...updates,
       updatedAt: Timestamp.now(),
-    });
+      _encrypted: true,
+      _encryptionVersion: DOCUMENT_ENCRYPTION_VERSION,
+    };
+
+    if (updates.title !== undefined) {
+      encryptedUpdates.title = encryptText(updates.title);
+    }
+    if (updates.description !== undefined) {
+      encryptedUpdates.description = encryptText(updates.description);
+    }
+    if (updates.category !== undefined) {
+      encryptedUpdates.category = encryptText(updates.category);
+    }
+    if (updates.fileUrl !== undefined) {
+      encryptedUpdates.fileUrl = encryptText(updates.fileUrl);
+    }
+    if (updates.fileName !== undefined) {
+      encryptedUpdates.fileName = encryptText(updates.fileName);
+    }
+    if (updates.tags !== undefined) {
+      encryptedUpdates.tags = encryptTags(updates.tags);
+    }
+
+    await updateDoc(docRef, encryptedUpdates);
   } catch (error) {
-    console.error('Error updating document:', error);
     throw error;
   }
 };
@@ -263,7 +305,6 @@ export const deleteDocument = async (documentId: string): Promise<void> => {
   try {
     await deleteDoc(doc(db, DOCUMENTS_COLLECTION, documentId));
   } catch (error) {
-    console.error('Error deleting document:', error);
     throw error;
   }
 };
@@ -282,7 +323,6 @@ export const searchDocuments = async (userId: string, searchTerm: string): Promi
       doc.tags.some(tag => tag.toLowerCase().includes(lowerSearch))
     );
   } catch (error) {
-    console.error('Error searching documents:', error);
     throw error;
   }
 };

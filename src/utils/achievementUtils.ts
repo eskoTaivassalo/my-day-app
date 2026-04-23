@@ -25,6 +25,8 @@ export interface Stats {
   maxImagesInEntry: number;
 }
 
+export type AchievementLocale = 'fi' | 'en' | 'sv';
+
 export const achievements: Achievement[] = [
   // Streak saavutukset
   { id: 1, name: 'Ensimmäinen askel', icon: '🎖️', requirement: 1, type: 'streak', description: 'Kirjoita ensimmäinen merkintäsi' },
@@ -154,6 +156,155 @@ export const achievements: Achievement[] = [
   { id: 107, name: 'Kaksitoista kuvaa', icon: '📚', requirement: 12, type: 'photoCollection', description: '12 kuvaa yhdessä merkinnässä' },
   { id: 108, name: 'Viisitoista kuvaa', icon: '📚', requirement: 15, type: 'photoCollection', description: '15 kuvaa yhdessä merkinnässä' },
 ];
+
+const pluralize = (count: number, one: string, many: string) =>
+  count === 1 ? one : many;
+
+const getEnAchievementName = (achievement: Achievement): string => {
+  const n = achievement.requirement;
+  switch (achievement.type) {
+    case 'streak':
+      return n === 1 ? 'First Step' : `${n}-Day Streak`;
+    case 'entries':
+      return `${n} ${pluralize(n, 'Entry', 'Entries')}`;
+    case 'images':
+      return `${n} ${pluralize(n, 'Photo', 'Photos')}`;
+    case 'words':
+      return `${n} ${pluralize(n, 'Word', 'Words')}`;
+    case 'multiDay':
+      return `${n} in One Day`;
+    case 'shared':
+      return `Share ${n}`;
+    case 'location':
+      return `Location ${n}`;
+    case 'earlyBird':
+      return n === 1 ? 'Early Bird' : `Morning ${n}`;
+    case 'nightOwl':
+      return n === 1 ? 'Night Owl' : `Night ${n}`;
+    case 'weekend':
+      return `Weekend ${n}`;
+    case 'photoCollection':
+      return `${n} in One Entry`;
+    default:
+      return achievement.name;
+  }
+};
+
+const getSvAchievementName = (achievement: Achievement): string => {
+  const n = achievement.requirement;
+  switch (achievement.type) {
+    case 'streak':
+      return n === 1 ? 'Forsta steget' : `${n} dagars svit`;
+    case 'entries':
+      return `${n} anteckningar`;
+    case 'images':
+      return `${n} bilder`;
+    case 'words':
+      return `${n} ord`;
+    case 'multiDay':
+      return `${n} pa en dag`;
+    case 'shared':
+      return `Dela ${n}`;
+    case 'location':
+      return `Plats ${n}`;
+    case 'earlyBird':
+      return n === 1 ? 'Morgonfagel' : `Morgon ${n}`;
+    case 'nightOwl':
+      return n === 1 ? 'Nattuggla' : `Natt ${n}`;
+    case 'weekend':
+      return `Helg ${n}`;
+    case 'photoCollection':
+      return `${n} i en anteckning`;
+    default:
+      return achievement.name;
+  }
+};
+
+const getEnAchievementDescription = (achievement: Achievement): string => {
+  const n = achievement.requirement;
+  switch (achievement.type) {
+    case 'streak':
+      return n === 1 ? 'Write your first entry' : `${n}-day streak`;
+    case 'entries':
+      return `${n} ${pluralize(n, 'entry', 'entries')}`;
+    case 'images':
+      return n === 1 ? 'Add your first photo' : `${n} photos`;
+    case 'words':
+      return `${n} words total`;
+    case 'multiDay':
+      return `${n} entries in one day`;
+    case 'shared':
+      return n === 1 ? 'Share your first entry' : `Share ${n} entries`;
+    case 'location':
+      return n === 1 ? 'Add location to an entry' : `${n} entries with location`;
+    case 'earlyBird':
+      return n === 1 ? 'Write before 8 AM' : `${n} entries before 8 AM`;
+    case 'nightOwl':
+      return n === 1 ? 'Write after 10 PM' : `${n} entries after 10 PM`;
+    case 'weekend':
+      return n === 1 ? 'Write on the weekend' : `${n} weekend entries`;
+    case 'photoCollection':
+      return `${n} photos in one entry`;
+    default:
+      return achievement.description;
+  }
+};
+
+const getSvAchievementDescription = (achievement: Achievement): string => {
+  const n = achievement.requirement;
+  switch (achievement.type) {
+    case 'streak':
+      return n === 1 ? 'Skriv din forsta anteckning' : `${n} dagars svit`;
+    case 'entries':
+      return `${n} anteckningar`;
+    case 'images':
+      return n === 1 ? 'Lagg till din forsta bild' : `${n} bilder`;
+    case 'words':
+      return `${n} ord totalt`;
+    case 'multiDay':
+      return `${n} anteckningar samma dag`;
+    case 'shared':
+      return n === 1 ? 'Dela din forsta anteckning' : `Dela ${n} anteckningar`;
+    case 'location':
+      return n === 1 ? 'Lagg till plats i en anteckning' : `${n} anteckningar med plats`;
+    case 'earlyBird':
+      return n === 1 ? 'Skriv fore kl. 8' : `${n} anteckningar fore kl. 8`;
+    case 'nightOwl':
+      return n === 1 ? 'Skriv efter kl. 22' : `${n} anteckningar efter kl. 22`;
+    case 'weekend':
+      return n === 1 ? 'Skriv pa helgen' : `${n} helganteckningar`;
+    case 'photoCollection':
+      return `${n} bilder i en anteckning`;
+    default:
+      return achievement.description;
+  }
+};
+
+export const getLocalizedAchievement = (
+  achievement: Achievement,
+  locale: AchievementLocale,
+): Achievement => {
+  if (locale === 'fi') return achievement;
+
+  if (locale === 'en') {
+    return {
+      ...achievement,
+      name: getEnAchievementName(achievement),
+      description: getEnAchievementDescription(achievement),
+    };
+  }
+
+  return {
+    ...achievement,
+    name: getSvAchievementName(achievement),
+    description: getSvAchievementDescription(achievement),
+  };
+};
+
+export const getLocalizedAchievements = (
+  list: Achievement[],
+  locale: AchievementLocale,
+): Achievement[] => list.map((achievement) => getLocalizedAchievement(achievement, locale));
 
 export const calculateStreaks = (entries: DiaryEntry[]): { current: number; longest: number } => {
   if (entries.length === 0) return { current: 0, longest: 0 };

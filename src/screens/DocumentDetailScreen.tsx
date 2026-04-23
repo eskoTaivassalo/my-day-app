@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,9 +14,16 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Document, DOCUMENT_CATEGORIES } from '../types/Document';
 import { deleteDocument, getDecryptedDocumentUri, isEncryptedDocumentUrl } from '../services/documentService';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function DocumentDetailScreen({ route, navigation }: any) {
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
   const docParam = route.params.document;
   const document: Document = {
     ...docParam,
@@ -29,6 +36,18 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
   const [resolvedThumbnailUri, setResolvedThumbnailUri] = useState(document.thumbnailUrl || null);
   const [resolvingFile, setResolvingFile] = useState(false);
   const category = DOCUMENT_CATEGORIES[document.category];
+  const categoryLabel = useMemo(() =>
+    document.category === 'receipt'
+      ? t('doc_category_receipt')
+      : document.category === 'contract'
+      ? t('doc_category_contract')
+      : document.category === 'invoice'
+      ? t('doc_category_invoice')
+      : document.category === 'certificate'
+      ? t('doc_category_certificate')
+      : t('doc_category_other'),
+    [document.category, t]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -56,8 +75,7 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
             setResolvedThumbnailUri(decryptedThumbUri);
           }
         }
-      } catch (error) {
-        console.error('Error resolving encrypted document URIs:', error);
+      } catch {
       } finally {
         if (isMounted) {
           setResolvingFile(false);
@@ -79,11 +97,10 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
       if (supported) {
         await Linking.openURL(openUri);
       } else {
-        Alert.alert('Virhe', 'Tiedostoa ei voida avata');
+        Alert.alert(t('common_error'), t('doc_detail_open_failed'));
       }
-    } catch (error) {
-      console.error('Error opening document:', error);
-      Alert.alert('Virhe', 'Tiedoston avaaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('doc_detail_open_failed'));
     }
   };
 
@@ -105,15 +122,14 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
       // Check if sharing is available
       const isAvailable = await Sharing.isAvailableAsync();
       if (!isAvailable) {
-        Alert.alert('Virhe', 'Jakaminen ei ole saatavilla tällä laitteella');
+        Alert.alert(t('common_error'), t('doc_detail_share_no_support'));
         return;
       }
 
       // Share the file
       await Sharing.shareAsync(shareUri);
-    } catch (error) {
-      console.error('Error sharing document:', error);
-      Alert.alert('Virhe', 'Dokumentin jakaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('doc_detail_share_failed'));
     } finally {
       setLoading(false);
     }
@@ -121,21 +137,21 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
 
   const handleDeleteDocument = () => {
     Alert.alert(
-      'Poista dokumentti',
-      `Haluatko varmasti poistaa dokumentin "${document.title}"?`,
+      t('documents_delete_title'),
+      t('doc_detail_delete_confirm', { title: document.title }),
       [
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('common_cancel'), style: 'cancel' },
         {
-          text: 'Poista',
+          text: t('common_delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteDocument(document.id);
-              Alert.alert('Poistettu', 'Dokumentti poistettu', [
-                { text: 'OK', onPress: () => navigation.goBack() }
+              Alert.alert(t('common_deleted'), t('documents_deleted'), [
+                { text: t('common_ok'), onPress: () => navigation.goBack() }
               ]);
             } catch (error) {
-              Alert.alert('Virhe', 'Dokumentin poistaminen epäonnistui');
+              Alert.alert(t('common_error'), t('documents_delete_failed'));
             }
           },
         },
@@ -144,13 +160,13 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }] }>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backButtonText}>←</Text>
+          <Text style={[styles.backButtonText, { color: theme.colors.primary }]}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{document.title}</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]} numberOfLines={1}>{document.title}</Text>
         <TouchableOpacity onPress={handleDeleteDocument} style={styles.deleteButton}>
           <Text style={styles.deleteButtonText}>🗑️</Text>
         </TouchableOpacity>
@@ -162,8 +178,8 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
           <View style={styles.previewContainer}>
             {resolvingFile && isEncryptedDocumentUrl(document.fileUrl) ? (
               <View style={styles.previewLoadingContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.previewLoadingText}>Puretaan salattua kuvaa...</Text>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={[styles.previewLoadingText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_decrypting')}</Text>
               </View>
             ) : (
               <Image 
@@ -176,33 +192,33 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
         )}
 
         {document.fileType === 'pdf' && (
-          <View style={styles.fileTypePreview}>
+          <View style={[styles.fileTypePreview, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border, borderWidth: 1 }]}>
             <Text style={styles.fileTypeIcon}>📄</Text>
-            <Text style={styles.fileTypeName}>PDF-dokumentti</Text>
+            <Text style={[styles.fileTypeName, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_pdf')}</Text>
           </View>
         )}
 
         {document.fileType === 'docx' && (
-          <View style={styles.fileTypePreview}>
+          <View style={[styles.fileTypePreview, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border, borderWidth: 1 }]}>
             <Text style={styles.fileTypeIcon}>📝</Text>
-            <Text style={styles.fileTypeName}>Word-dokumentti</Text>
+            <Text style={[styles.fileTypeName, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_word')}</Text>
           </View>
         )}
 
         {/* Document Info */}
-        <View style={styles.infoCard}>
+        <View style={[styles.infoCard, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border, borderWidth: 1 }]}>
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Kategoria</Text>
+            <Text style={[styles.infoLabel, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_category')}</Text>
             <View style={styles.categoryBadge}>
               <Text style={styles.categoryIcon}>{category.icon}</Text>
-              <Text style={styles.categoryText}>{category.label}</Text>
+              <Text style={styles.categoryText}>{categoryLabel}</Text>
             </View>
           </View>
 
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Päivämäärä</Text>
-            <Text style={styles.infoValue}>
-              {new Date(document.date).toLocaleDateString('fi-FI', {
+            <Text style={[styles.infoLabel, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_date')}</Text>
+            <Text style={[styles.infoValue, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
+              {new Date(document.date).toLocaleDateString(locale, {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
@@ -212,25 +228,25 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
           </View>
 
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Tiedostotyyppi</Text>
-            <Text style={styles.infoValue}>{document.fileType.toUpperCase()}</Text>
+            <Text style={[styles.infoLabel, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_file_type')}</Text>
+            <Text style={[styles.infoValue, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{document.fileType.toUpperCase()}</Text>
           </View>
 
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Tiedostonimi</Text>
-            <Text style={styles.infoValue} numberOfLines={1}>{document.fileName}</Text>
+            <Text style={[styles.infoLabel, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_file_name')}</Text>
+            <Text style={[styles.infoValue, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]} numberOfLines={1}>{document.fileName}</Text>
           </View>
 
           {document.description && (
             <View style={styles.descriptionSection}>
-              <Text style={styles.infoLabel}>Kuvaus</Text>
+              <Text style={styles.infoLabel}>{t('doc_detail_description')}</Text>
               <Text style={styles.descriptionText}>{document.description}</Text>
             </View>
           )}
 
           {document.tags.length > 0 && (
             <View style={styles.tagsSection}>
-              <Text style={styles.infoLabel}>Tagit</Text>
+              <Text style={styles.infoLabel}>{t('doc_detail_tags')}</Text>
               <View style={styles.tagsContainer}>
                 {document.tags.map((tag, index) => (
                   <View key={index} style={styles.tag}>
@@ -243,11 +259,11 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
 
           <View style={styles.timestampSection}>
             <Text style={styles.timestampText}>
-              Luotu: {new Date(document.createdAt).toLocaleDateString('fi-FI')} {new Date(document.createdAt).toLocaleTimeString('fi-FI')}
+              {t('doc_detail_created')} {new Date(document.createdAt).toLocaleDateString(locale)} {new Date(document.createdAt).toLocaleTimeString(locale)}
             </Text>
-            {document.updatedAt && document.updatedAt !== document.createdAt && (
+            {document.updatedAt && document.updatedAt.getTime() !== document.createdAt.getTime() && (
               <Text style={styles.timestampText}>
-                Päivitetty: {new Date(document.updatedAt).toLocaleDateString('fi-FI')} {new Date(document.updatedAt).toLocaleTimeString('fi-FI')}
+                {t('doc_detail_updated')} {new Date(document.updatedAt).toLocaleDateString(locale)} {new Date(document.updatedAt).toLocaleTimeString(locale)}
               </Text>
             )}
           </View>
@@ -256,25 +272,25 @@ export default function DocumentDetailScreen({ route, navigation }: any) {
         {/* Actions */}
         <View style={styles.actionsContainer}>
           <TouchableOpacity 
-            style={styles.actionButton} 
+            style={[styles.actionButton, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border }] } 
             onPress={handleOpenDocument}
             disabled={loading}
           >
             <Text style={styles.actionButtonIcon}>🔗</Text>
-            <Text style={styles.actionButtonText}>Avaa dokumentti</Text>
+            <Text style={[styles.actionButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_open')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={styles.actionButton} 
+            style={[styles.actionButton, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border }] } 
             onPress={handleShareDocument}
             disabled={loading}
           >
             {loading ? (
-              <ActivityIndicator size="small" color={colors.primary} />
+              <ActivityIndicator size="small" color={theme.colors.primary} />
             ) : (
               <>
                 <Text style={styles.actionButtonIcon}>📤</Text>
-                <Text style={styles.actionButtonText}>Jaa dokumentti</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('doc_detail_share')}</Text>
               </>
             )}
           </TouchableOpacity>

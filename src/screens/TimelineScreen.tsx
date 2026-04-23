@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
+  Animated,
+  Easing,
   FlatList,
   ScrollView,
   TouchableOpacity,
@@ -10,22 +12,23 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
-  Animated,
   TextInput,
   Dimensions,
   InteractionManager,
-  Easing,
+  Platform,
+  UIManager,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import {
   getEntriesFast,
   getUserProfile,
-  getCachedVideoThumbnailUri,
   ensureVideoThumbnailCached,
   resolveEntryImagesInBackground,
-  resolveVideoUriForPlayback,
 } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 import AchievementToast from '../components/AchievementToast';
@@ -41,17 +44,120 @@ import {
   getUnlockedAchievementIds,
   addUnlockedAchievement,
 } from '../services/achievementStorageService';
-import * as VideoThumbnails from 'expo-video-thumbnails';
 import {
   achievements,
   calculateStats,
   checkNewAchievements,
+  getUnlockedAchievements,
+  getLocalizedAchievement,
   Achievement,
   Stats,
 } from '../utils/achievementUtils';
 
 const { width } = Dimensions.get('window');
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
+const INITIAL_ENTRIES_LIMIT = 60;
+const INITIAL_MEDIA_RESOLVE_LIMIT = 24;
+const GREETING_VARIANT_COUNT = 100;
+
+const GREETING_OPENERS = {
+  fi: [
+    'Huippua paivaa,',
+    'Kiva nahda sinut,',
+    'Tanaan on sinun paivasi,',
+    'Ihana kun palasit,',
+    'Tervetuloa takaisin,',
+    'Nyt lahtee lempeasti,',
+    'Hyva rytmi jatkuu,',
+    'Olet oikeassa paikassa,',
+    'Pieni askel, iso fiilis,',
+    'Sinussa on valoa,',
+  ],
+  en: [
+    'Great to see you,',
+    'Welcome back,',
+    'This day is yours,',
+    'You are doing amazing,',
+    'Your story continues,',
+    'A fresh page awaits,',
+    'You are in the zone,',
+    'Keep your momentum,',
+    'A calm start for you,',
+    'Today looks bright,',
+  ],
+  sv: [
+    'Harligt att se dig,',
+    'Valkommen tillbaka,',
+    'Den har dagen ar din,',
+    'Du gor det jattebra,',
+    'Din resa fortsatter,',
+    'En ny sida vantar,',
+    'Du ar i flyt idag,',
+    'Fortsatt i din takt,',
+    'En lugn start for dig,',
+    'Idag ser lovande ut,',
+  ],
+} as const;
+
+const GREETING_ENDINGS = {
+  fi: [
+    'Kirjoita yksi ajatus talteen.',
+    'Yksi merkinta riittaa taman paivan voittoon.',
+    'Anna tunteille tilaa ja sana kerrallaan eteenpain.',
+    'Sinun tarinasi ansaitsee tulla kuulluksi.',
+    'Nyt on hyva hetki pysahtya hetkeksi.',
+    'Pieni teksti voi tehda ison eron.',
+    'Lampo ja rohkeus mukana tanaankin.',
+    'Olet jo hyvassa vauhdissa.',
+    'Jatka juuri omalla tavallasi.',
+    'Tasta tulee hyva paiva muistettavaksi.',
+  ],
+  en: [
+    'Capture one thought and make it yours.',
+    'One short entry is a great win today.',
+    'Give your feelings room, one line at a time.',
+    'Your story deserves to be heard.',
+    'This is a good moment to pause and breathe.',
+    'A tiny note can change the whole day.',
+    'Bring warmth and courage into this moment.',
+    'You are already moving in the right direction.',
+    'Keep going in your own way.',
+    'This can become a beautiful memory.',
+  ],
+  sv: [
+    'Skriv ner en tanke och gor den till din.',
+    'En kort anteckning ar en fin vinst idag.',
+    'Ge kanslorna plats, en rad i taget.',
+    'Din berattelse fortjanar att bli hord.',
+    'Det ar ett bra tillfalle att stanna upp.',
+    'En liten notis kan forandra hela dagen.',
+    'Ta med varme och mod in i stunden.',
+    'Du ar redan pa ratt vag.',
+    'Fortsatt precis pa ditt satt.',
+    'Det har kan bli ett fint minne.',
+  ],
+} as const;
+
+const getLanguageKey = (language: string): 'fi' | 'en' | 'sv' => {
+  if (language === 'en') return 'en';
+  if (language === 'sv') return 'sv';
+  return 'fi';
+};
+
+const buildGreetingBank = (language: string, name: string): string[] => {
+  const languageKey = getLanguageKey(language);
+  const openers = GREETING_OPENERS[languageKey];
+  const endings = GREETING_ENDINGS[languageKey];
+  const bank: string[] = [];
+
+  for (let row = 0; row < openers.length; row += 1) {
+    for (let col = 0; col < endings.length; col += 1) {
+      bank.push(`${openers[row]} ${name}. ${endings[col]}`);
+    }
+  }
+
+  return bank;
+};
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
@@ -80,172 +186,308 @@ export default function TimelineScreen({ navigation }: any) {
   const [showReminderToast, setShowReminderToast] = useState(false);
   const [reminderToastMessage, setReminderToastMessage] = useState('');
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
-  const [visibleEntryIds, setVisibleEntryIds] = useState<Set<string>>(new Set());
+  const [achievementsLoaded, setAchievementsLoaded] = useState(false);
+  const [showGreetingCard, setShowGreetingCard] = useState(true);
+  const [greetingVariantIndex, setGreetingVariantIndex] = useState(0);
   const [videoThumbnailMap, setVideoThumbnailMap] = useState<Record<string, string>>({});
-  const { user } = useAuth();
+  const { user, encryptionStatus } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const locale = getLocaleFromLanguage(language);
   
   // Muista viimeiset tilastot joista näytettiin toast
   const lastProcessedStats = useRef<Stats | null>(null);
   const entriesLoadInFlightRef = useRef(false);
-  const thumbnailBackfillQueueRef = useRef<Array<{ entryId: string; videoUrl: string }>>([]);
-  const thumbnailBackfillInFlightRef = useRef(false);
-  const thumbnailBackfillSeenRef = useRef<Set<string>>(new Set());
-  const videoThumbnailFadeMapRef = useRef<Record<string, Animated.Value>>({});
+  const greetingOpacityAnim = useRef(new Animated.Value(0)).current;
+  const greetingTranslateAnim = useRef(new Animated.Value(14)).current;
+  const greetingScaleAnim = useRef(new Animated.Value(0.9)).current;
 
-  const getVideoThumbnailFadeValue = (entryId: string): Animated.Value => {
-    if (!videoThumbnailFadeMapRef.current[entryId]) {
-      videoThumbnailFadeMapRef.current[entryId] = new Animated.Value(0);
+  useEffect(() => {
+    const isFabric = Boolean((global as any).nativeFabricUIManager);
+    if (Platform.OS === 'android' && !isFabric && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
     }
-    return videoThumbnailFadeMapRef.current[entryId];
-  };
+  }, []);
 
-  const resetVideoThumbnailFade = (entryId: string) => {
-    getVideoThumbnailFadeValue(entryId).setValue(0);
-  };
+  useEffect(() => {
+    setAchievementsLoaded(false);
+  }, [user?.uid]);
 
-  const animateVideoThumbnailFadeIn = (entryId: string) => {
-    Animated.timing(getVideoThumbnailFadeValue(entryId), {
-      toValue: 1,
-      duration: 420,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const processThumbnailBackfillQueue = async () => {
-    if (thumbnailBackfillInFlightRef.current) {
+  const setThumbnailForEntry = (entryId: string, thumbnailUri: string | null | undefined) => {
+    if (!thumbnailUri) {
       return;
     }
 
-    thumbnailBackfillInFlightRef.current = true;
-    try {
-      while (thumbnailBackfillQueueRef.current.length > 0) {
-        const next = thumbnailBackfillQueueRef.current.shift();
-        if (!next) continue;
-
-        // Wait until UI interactions settle to avoid jank while scrolling.
-        await new Promise<void>((resolve) => {
-          InteractionManager.runAfterInteractions(() => resolve());
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 250));
-
-        const thumbnailUri = await ensureVideoThumbnailCached(next.videoUrl);
-        if (thumbnailUri) {
-          resetVideoThumbnailFade(next.entryId);
-          setVideoThumbnailMap((prev) => ({ ...prev, [next.entryId]: thumbnailUri }));
-          console.log(`✅ [thumbnailBackfill] Cached thumbnail ready for ${next.entryId}`);
-        } else {
-          console.log(`⚠️ [thumbnailBackfill] Could not build thumbnail for ${next.entryId}`);
-        }
+    setVideoThumbnailMap((prev) => {
+      const existing = prev[entryId];
+      if (existing) {
+        return prev;
       }
-    } finally {
-      thumbnailBackfillInFlightRef.current = false;
-    }
+
+      return { ...prev, [entryId]: thumbnailUri };
+    });
   };
 
-  const enqueueThumbnailBackfill = (entryId: string, videoUrl: string) => {
-    const queueKey = `${entryId}:${videoUrl}`;
-    if (thumbnailBackfillSeenRef.current.has(queueKey)) {
-      return;
+  // Suodata merkinnät hakutermin perusteella vain kun data tai hakuteksti muuttuu.
+  const filteredEntries = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return entries;
     }
 
-    thumbnailBackfillSeenRef.current.add(queueKey);
-    thumbnailBackfillQueueRef.current.push({ entryId, videoUrl });
-    void processThumbnailBackfillQueue();
-  };
+    return entries.filter((entry) => {
+      const titleMatch = entry.title.toLowerCase().includes(query);
+      const contentMatch = entry.content.toLowerCase().includes(query);
+      const locationMatch = entry.location?.address?.toLowerCase().includes(query) || false;
 
-  // Suodata merkinnät hakutermin perusteella
-  const filteredEntries = entries.filter((entry) => {
-    if (!searchQuery.trim()) return true;
-    
-    const query = searchQuery.toLowerCase();
-    const titleMatch = entry.title.toLowerCase().includes(query);
-    const contentMatch = entry.content.toLowerCase().includes(query);
-    const locationMatch = entry.location?.address?.toLowerCase().includes(query) || false;
-    
-    return titleMatch || contentMatch || locationMatch;
-  });
+      return titleMatch || contentMatch || locationMatch;
+    });
+  }, [entries, searchQuery]);
+
+  const timelineDisplayName = useMemo(() => {
+    const emailNameFallback = user?.email
+      ? user.email
+          .split('@')[0]
+          .replace(/[._-]+/g, ' ')
+          .replace(/\b\w/g, (char) => char.toUpperCase())
+      : '';
+
+    return user?.displayName?.trim() || emailNameFallback || t('profile_user_fallback');
+  }, [t, user?.displayName, user?.email]);
+
+  useEffect(() => {
+    setGreetingVariantIndex(Math.floor(Math.random() * GREETING_VARIANT_COUNT));
+  }, [language, user?.uid]);
+
+  const greetingBank = useMemo(
+    () => buildGreetingBank(language, timelineDisplayName),
+    [language, timelineDisplayName]
+  );
+
+  const dailyGreetingText = useMemo(
+    () => greetingBank[greetingVariantIndex % greetingBank.length] || '',
+    [greetingBank, greetingVariantIndex]
+  );
+
+  const greetingPalette = useMemo(() => {
+    const hue = (greetingVariantIndex * 47) % 360;
+    const secondaryHue = (hue + 28) % 360;
+
+    return {
+      backgroundColor: `hsl(${hue}, 100%, 94%)`,
+      borderColor: `hsl(${hue}, 78%, 54%)`,
+      accentColor: `hsl(${secondaryHue}, 72%, 34%)`,
+    };
+  }, [greetingVariantIndex]);
+
+  const greetingStyleVariant = useMemo(() => {
+    const variant = (greetingVariantIndex % 4) + 1;
+
+    switch (variant) {
+      case 1:
+        return {
+          fontFamily: theme.fonts.headingFamily,
+          fontStyle: 'normal' as const,
+          letterSpacing: 0.2,
+          color: greetingPalette.accentColor,
+        };
+      case 2:
+        return {
+          fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+          fontStyle: 'italic' as const,
+          letterSpacing: 0.4,
+          color: greetingPalette.accentColor,
+        };
+      case 3:
+        return {
+          fontFamily: theme.fonts.bodyFamily,
+          fontStyle: 'normal' as const,
+          letterSpacing: 0.8,
+          color: greetingPalette.accentColor,
+        };
+      default:
+        return {
+          fontFamily: Platform.OS === 'ios' ? 'AvenirNext-DemiBold' : theme.fonts.headingFamily,
+          fontStyle: 'normal' as const,
+          letterSpacing: 0.1,
+          color: greetingPalette.accentColor,
+        };
+    }
+  }, [greetingPalette.accentColor, greetingVariantIndex, theme.fonts.bodyFamily, theme.fonts.headingFamily]);
+
+  const greetingVisibleDurationMs = useMemo(() => {
+    const chars = dailyGreetingText.trim().length;
+    const baseMs = 1700;
+    const perCharMs = 24;
+    const minMs = 2200;
+    const maxMs = 5200;
+
+    return Math.max(minMs, Math.min(maxMs, baseMs + chars * perCharMs));
+  }, [dailyGreetingText]);
+
+  useEffect(() => {
+    setShowGreetingCard(true);
+    greetingOpacityAnim.setValue(0);
+    greetingTranslateAnim.setValue(28);
+    greetingScaleAnim.setValue(0.9);
+
+    const animation = Animated.sequence([
+      Animated.parallel([
+        Animated.timing(greetingOpacityAnim, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(greetingTranslateAnim, {
+          toValue: -4,
+          duration: 760,
+          easing: Easing.out(Easing.back(1.1)),
+          useNativeDriver: true,
+        }),
+        Animated.timing(greetingScaleAnim, {
+          toValue: 1.04,
+          duration: 760,
+          easing: Easing.out(Easing.back(1.05)),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.parallel([
+        Animated.timing(greetingTranslateAnim, {
+          toValue: 0,
+          duration: 240,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(greetingScaleAnim, {
+          toValue: 1,
+          duration: 240,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.delay(greetingVisibleDurationMs),
+      Animated.parallel([
+        Animated.timing(greetingOpacityAnim, {
+          toValue: 0,
+          duration: 1800,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(greetingTranslateAnim, {
+          toValue: -10,
+          duration: 1800,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+
+    const rafId = requestAnimationFrame(() => {
+      animation.start(({ finished }) => {
+        if (finished) {
+          setShowGreetingCard(false);
+        }
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      animation.stop();
+    };
+  }, [dailyGreetingText, greetingOpacityAnim, greetingScaleAnim, greetingTranslateAnim, greetingVisibleDurationMs]);
+
+  const themed = useMemo(
+    () => ({
+      screenBg: { backgroundColor: theme.colors.backgroundLight },
+      headerBg: { backgroundColor: theme.colors.background, borderBottomColor: theme.colors.border },
+      headingText: { color: theme.colors.text, fontFamily: theme.fonts.headingFamily },
+      chipBg: { backgroundColor: theme.colors.backgroundLight },
+      searchBg: { backgroundColor: theme.colors.backgroundLight },
+      searchBorder: { borderColor: theme.colors.border },
+      searchText: { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+      mutedText: { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily },
+      linkText: { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily },
+      cardBg: { backgroundColor: theme.colors.background, borderColor: theme.colors.border },
+      cardTitle: { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+      progress: { backgroundColor: theme.colors.primary },
+      primaryText: { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+      secondaryText: { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily },
+      dateBg: { backgroundColor: theme.colors.primary },
+      emptyButtonBg: { backgroundColor: theme.colors.primary },
+      fabBg: { backgroundColor: theme.colors.primary },
+    }),
+    [theme],
+  );
 
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     React.useCallback(() => {
-      console.log('🎯 [TimelineScreen] useFocusEffect triggered, user:', user?.uid);
-      if (user) {
+      if (user && encryptionStatus === 'ready') {
         // Lataa saavutukset ensin, sitten entries
-        console.log('🎯 [TimelineScreen] Starting achievement load...');
         loadUnlockedAchievements().then((ids) => {
-          console.log(`🎯 [TimelineScreen] Loaded ${ids.length} unlocked achievements:`, ids);
-          console.log('🎯 [TimelineScreen] Starting entries load...');
           loadEntries(ids).then(() => {
-            console.log('🎯 [TimelineScreen] Entries loaded, checking for reminders...');
             maybeShowTodayReminders({ ignoreLastShown: true });
           });
         });
-        console.log('🎯 [TimelineScreen] Starting profile load...');
         loadUserProfile();
       }
-    }, [user])
+    }, [user, encryptionStatus])
   );
 
   const loadUnlockedAchievements = async (): Promise<number[]> => {
-    console.log('📊 [loadUnlockedAchievements] Starting...');
     if (!user) return [];
     
     try {
       const ids = await getUnlockedAchievementIds(user.uid);
-      console.log(`📊 [loadUnlockedAchievements] Got ${ids.length} achievements:`, ids);
       setUnlockedAchievementIds(ids);
+      setAchievementsLoaded(true);
       return ids;
     } catch (error) {
-      console.error('❌ [loadUnlockedAchievements] Error:', error);
+      setAchievementsLoaded(true);
       return [];
     }
   };
 
   const loadUserProfile = async () => {
-    console.log('👤 [loadUserProfile] Starting...');
     if (!user) return;
 
     try {
       const profile = await getUserProfile(user.uid);
-      console.log('👤 [loadUserProfile] Got profile:', profile?.displayName);
       if (profile?.photoURL) {
         setProfileImage(profile.photoURL);
       }
     } catch (error) {
-      console.error('Error loading user profile:', error);
     }
   };
 
   const loadEntries = async (unlockedIds?: number[]) => {
-    if (!user) return;
+    if (!user || encryptionStatus !== 'ready') return;
 
     // Estä päällekkäiset lataukset (esim. focus + strict mode -tuplakutsu)
     if (entriesLoadInFlightRef.current) {
-      console.log('⚠️ [loadEntries] Load already in flight, skipping');
       return;
     }
     entriesLoadInFlightRef.current = true;
-    console.log('📚 [loadEntries] Starting entry load...');
     
     // Use provided IDs or fall back to state (for refresh scenarios)
     const previouslyUnlockedIds = unlockedIds !== undefined ? unlockedIds : unlockedAchievementIds;
-    console.log(`📚 [loadEntries] Previously unlocked achievements: ${previouslyUnlockedIds.length}`);
     
     try {
       setEntriesLoading(true);
-      const userEntries = await getEntriesFast(user.uid, 10);
-      console.log(`📚 [loadEntries] Got ${userEntries.length} entries from Firebase`);
+      const userEntries = await getEntriesFast(user.uid, INITIAL_ENTRIES_LIMIT);
+
+      // Delay heavy media processing and only process initially visible items.
+      InteractionManager.runAfterInteractions(() => {
+        void resolveVideoThumbnailsInBackground(userEntries.slice(0, INITIAL_MEDIA_RESOLVE_LIMIT));
+      });
 
       // Näytä lista heti (älä odota saavutusten tallennuksia)
       setEntries(userEntries);
       setEntriesLoading(false);
-      console.log('📚 [loadEntries] UI updated with entries');
       
       // Calculate new stats
       const newStats = calculateStats(userEntries);
-      console.log(`📊 [loadEntries] New stats: ${newStats.totalEntries} entries, ${newStats.currentStreak} day streak, ${newStats.totalImages} images`);
       
       // Check for new achievements based on current stats
       // Use lastProcessedStats to avoid repeated achievements (not just empty object)
@@ -266,28 +508,26 @@ export default function TimelineScreen({ navigation }: any) {
       };
       
       const allStatsAchievements = checkNewAchievements(oldStats, newStats);
-      console.log(`🏆 [loadEntries] Achievement check: found ${allStatsAchievements.length} NEW achievements (old vs new stats)`);
       
       // Sync all achievements that are new according to stats but missing from AsyncStorage
-      const achievementsToSync = allStatsAchievements.filter(
-        achievement => !previouslyUnlockedIds.includes(achievement.id)
-      );
-      console.log(`🏆 [loadEntries] Achievements to sync+toast: ${achievementsToSync.length}`, achievementsToSync.map(a => a.name));
+      const achievementsToSync = achievementsLoaded
+        ? allStatsAchievements.filter((achievement) => !previouslyUnlockedIds.includes(achievement.id))
+        : [];
       
       if (achievementsToSync.length > 0 && user) {
-        console.log(`🏆 [loadEntries] Saving ${achievementsToSync.length} new achievements to AsyncStorage...`);
         // Tallenna saavutukset rinnakkain taustalla (ei blokata renderöintiä)
         void Promise.all(
           achievementsToSync.map((achievement) => addUnlockedAchievement(user.uid, achievement.id))
         ).catch((error) => {
-          console.error('❌ [loadEntries] Error saving achievements:', error);
         });
 
-        // Update local state
-        setUnlockedAchievementIds((prev) => [...prev, ...achievementsToSync.map((a) => a.id)]);
+        // Update local state without duplicating ids across repeated refresh cycles.
+        setUnlockedAchievementIds((prev) => {
+          const nextIds = achievementsToSync.map((achievement) => achievement.id);
+          return Array.from(new Set([...prev, ...nextIds]));
+        });
 
         // Show toast for the first new achievement
-        console.log(`🏆 [loadEntries] Showing achievement toast: ${achievementsToSync[0].name}`);
         setAchievementToast(achievementsToSync[0]);
         setShowToast(true);
 
@@ -295,7 +535,6 @@ export default function TimelineScreen({ navigation }: any) {
         if (achievementsToSync.length > 1) {
           for (let i = 1; i < Math.min(3, achievementsToSync.length); i++) {
             setTimeout(() => {
-              console.log(`🏆 [loadEntries] Showing achievement toast #${i + 1}: ${achievementsToSync[i].name}`);
               setAchievementToast(achievementsToSync[i]);
               setShowToast(true);
             }, i * 5500); // 5.5 second delay between each toast
@@ -306,59 +545,70 @@ export default function TimelineScreen({ navigation }: any) {
       // Always update the ref to current stats, so next load won't show achievements again
       lastProcessedStats.current = newStats;
       setStats(newStats);
-      console.log('✅ [loadEntries] Stats updated');
 
       // Puretaan kuvat taustalla (ei blokata ensimmäistä renderiä)
-      console.log('🖼️ [loadEntries] Starting background image resolve...');
-      resolveEntryImagesInBackground(userEntries)
-        .then((entriesWithImages) => {
-          console.log('🖼️ [loadEntries] Images resolved');
-          setEntries(entriesWithImages);
+      resolveEntryImagesInBackground(userEntries.slice(0, INITIAL_MEDIA_RESOLVE_LIMIT))
+        .then((resolvedEntriesSubset) => {
+          setEntries((prevEntries) => {
+            if (!prevEntries.length) {
+              return prevEntries;
+            }
 
-          console.log('🎬 [loadEntries] Starting background video thumbnail generation...');
-          void resolveVideoThumbnailsInBackground(entriesWithImages);
+            const resolvedMap = new Map(resolvedEntriesSubset.map((entry) => [entry.id, entry]));
+            let changed = false;
+
+            const merged = prevEntries.map((entry) => {
+              const resolved = resolvedMap.get(entry.id);
+              if (!resolved) {
+                return entry;
+              }
+
+              if (resolved.images === entry.images) {
+                return entry;
+              }
+
+              changed = true;
+              return {
+                ...entry,
+                images: resolved.images,
+              };
+            });
+
+            return changed ? merged : prevEntries;
+          });
         })
         .catch((error) => {
-          console.error('❌ [loadEntries] Error resolving entry images in background:', error);
         });
     } catch (error) {
-      console.error('❌ [loadEntries] Error loading entries:', error);
       setEntries([]);
       setEntriesLoading(false);
     } finally {
-      console.log('✅ [loadEntries] Load complete');
       entriesLoadInFlightRef.current = false;
     }
   };
 
   const onRefresh = async () => {
-    console.log('🔄 [onRefresh] User initiated refresh');
     setRefreshing(true);
     const ids = await loadUnlockedAchievements();
     await loadEntries(ids);
     await maybeShowTodayReminders({ ignoreLastShown: true });
-    console.log('✅ [onRefresh] Complete');
     setRefreshing(false);
   };
 
   const maybeShowTodayReminders = async (options?: { ignoreLastShown?: boolean }) => {
-    console.log('🔔 [maybeShowTodayReminders] Checking reminders...');
     const showEnabled = await getShowTodayRemindersAlert();
     if (!showEnabled) {
-      console.log('🔔 [maybeShowTodayReminders] Reminders disabled');
       return;
     }
 
     const todayKey = getTodayDateKey();
     const lastShown = await getLastReminderAlertDate();
-    console.log(`🔔 [maybeShowTodayReminders] Today: ${todayKey}, Last shown: ${lastShown}`);
 
     if (!options?.ignoreLastShown && lastShown === todayKey) {
-      console.log('🔔 [maybeShowTodayReminders] Already shown today, skipping');
       return;
     }
 
-    const summary = await getTodayRemindersSummary();
+    const summary = await getTodayRemindersSummary(locale);
 
     if (!summary) {
       return;
@@ -414,8 +664,56 @@ export default function TimelineScreen({ navigation }: any) {
     return { current, target, progress };
   };
 
+  const unlockedAchievementIdsFromStats = useMemo(() => {
+    return getUnlockedAchievements(stats).map((achievement) => achievement.id);
+  }, [stats]);
+
+  const effectiveUnlockedAchievementIds = useMemo(() => {
+    return Array.from(new Set([...unlockedAchievementIds, ...unlockedAchievementIdsFromStats]));
+  }, [unlockedAchievementIds, unlockedAchievementIdsFromStats]);
+
+  useEffect(() => {
+    if (!user || !achievementsLoaded) {
+      return;
+    }
+
+    const missingIds = unlockedAchievementIdsFromStats.filter(
+      (id) => !unlockedAchievementIds.includes(id)
+    );
+
+    if (missingIds.length === 0) {
+      return;
+    }
+
+    // Keep persisted achievement state aligned with current stats-derived unlocks.
+    void Promise.all(missingIds.map((id) => addUnlockedAchievement(user.uid, id))).catch(() => undefined);
+    setUnlockedAchievementIds((prev) => Array.from(new Set([...prev, ...missingIds])));
+  }, [achievementsLoaded, unlockedAchievementIds, unlockedAchievementIdsFromStats, user]);
+
+  const pendingAchievements = useMemo(() => {
+    return achievements
+      .filter((achievement) => !effectiveUnlockedAchievementIds.includes(achievement.id))
+      .map((achievement) => {
+        const localized = getLocalizedAchievement(achievement, language);
+        const progressInfo = getAchievementProgress(achievement);
+        const priority = progressInfo.target > 0 ? progressInfo.current / progressInfo.target : 0;
+
+        return {
+          achievement: localized,
+          progressInfo,
+          priority,
+        };
+      })
+      .sort((a, b) => {
+        if (b.priority !== a.priority) {
+          return b.priority - a.priority;
+        }
+        return a.progressInfo.target - b.progressInfo.target;
+      });
+  }, [effectiveUnlockedAchievementIds, language, stats]);
+
   const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('fi-FI', {
+    return new Date(date).toLocaleDateString(locale, {
       weekday: 'long',
       day: 'numeric',
       month: 'long',
@@ -429,108 +727,61 @@ export default function TimelineScreen({ navigation }: any) {
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const days = Math.floor(hours / 24);
     
-    if (hours < 1) return 'Juuri nyt';
-    if (hours < 24) return `${hours}h sitten`;
-    if (days === 1) return 'Eilen';
-    if (days < 7) return `${days} päivää sitten`;
+    if (hours < 1) return t('timeline_just_now');
+    if (hours < 24) return t('timeline_hours_ago', { hours });
+    if (days === 1) return t('timeline_yesterday');
+    if (days < 7) return t('timeline_days_ago', { days });
     return formatDate(date);
   };
 
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: DiaryEntry }> }) => {
-    const ids = new Set(viewableItems.map((viewable) => viewable.item?.id).filter(Boolean));
-    setVisibleEntryIds(ids as Set<string>);
-  }).current;
-
-  const viewabilityConfig = useRef({
-    itemVisiblePercentThreshold: 35,
-  }).current;
-
   const resolveVideoThumbnailsInBackground = async (entriesToResolve: DiaryEntry[]) => {
-    // Generate thumbnails sequentially to avoid UI blocking
-    // Skip first render - defer slightly to prevent UI freeze
-    const entriesWithVideos = entriesToResolve.filter((e) => e.videos && e.videos.length > 0);
-    console.log(`🎬 [resolveVideoThumbnailsInBackground] Starting thumbnail generation for ${entriesWithVideos.length} entries (deferring 1s)`);
-    
-    setTimeout(async () => {
-      console.log(`🎬 [resolveVideoThumbnailsInBackground] Timer fired, starting sequential thumbnail generation...`);
-      let successCount = 0;
-      let failCount = 0;
-      
-      for (const entry of entriesToResolve) {
-        try {
-          if (!entry.videos || entry.videos.length === 0) continue;
+    const entriesWithVideos = entriesToResolve.filter((entry) => entry.videos && entry.videos.length > 0);
 
-          const firstVideoUri = entry.videos[0];
-          if (!firstVideoUri) continue;
-
-          const storedThumbnailUrl = entry.videoThumbnails?.[firstVideoUri];
-          if (storedThumbnailUrl) {
-            resetVideoThumbnailFade(entry.id);
-            setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: storedThumbnailUrl }));
-            successCount++;
-            continue;
-          }
-
-          const cachedThumbnail = await getCachedVideoThumbnailUri(firstVideoUri);
-          if (cachedThumbnail) {
-            resetVideoThumbnailFade(entry.id);
-            setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: cachedThumbnail }));
-            successCount++;
-            continue;
-          }
-
-          // Encrypted videos are handled in an idle backfill queue to avoid scroll jank.
-          if (/\.enc(\?|$)/.test(firstVideoUri)) {
-            enqueueThumbnailBackfill(entry.id, firstVideoUri);
-            console.log(`🕒 [resolveVideoThumbnailsInBackground] Enqueued encrypted thumbnail backfill for ${entry.id}`);
-            failCount++;
-            continue;
-          }
-
-          // Small delay between each thumbnail generation
-          await new Promise((resolve) => setTimeout(resolve, 100));
-
-          console.log(`🎬 [resolveVideoThumbnailsInBackground] Getting thumbnail for entry ${entry.id}...`);
-          const startTime = Date.now();
-          
-          try {
-            const playableVideoUri = await resolveVideoUriForPlayback(firstVideoUri);
-            console.log(`🎬 [resolveVideoThumbnailsInBackground] Resolved video URI for ${entry.id} in ${Date.now() - startTime}ms`);
-            
-            const thumbnailStart = Date.now();
-            // Timeout: skip thumbnail if it takes longer than 15 seconds
-            const thumbnailPromise = VideoThumbnails.getThumbnailAsync(playableVideoUri, {
-              time: 0,
-              quality: 0.6,
-            });
-            
-            const timeoutPromise = new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error('Thumbnail generation timeout')), 15000)
-            );
-            
-            const thumbnailResult = await Promise.race([thumbnailPromise, timeoutPromise]);
-            console.log(`🎬 [resolveVideoThumbnailsInBackground] Generated thumbnail for ${entry.id} in ${Date.now() - thumbnailStart}ms`);
-
-            if (thumbnailResult?.uri) {
-              console.log(`✅ [resolveVideoThumbnailsInBackground] Thumbnail generated for entry ${entry.id}`);
-              successCount++;
-              setVideoThumbnailMap((prev) => ({ ...prev, [entry.id]: thumbnailResult.uri }));
-            } else {
-              console.log(`⚠️ [resolveVideoThumbnailsInBackground] No thumbnail URI returned for ${entry.id}`);
-              failCount++;
-            }
-          } catch (innerError) {
-            console.log(`⚠️ [resolveVideoThumbnailsInBackground] Inner error for ${entry.id}:`, innerError);
-            failCount++;
-          }
-        } catch (error) {
-          // Thumbnail ei välttämättä synny kaikille vanhoille videoille.
-          console.log(`⚠️ [resolveVideoThumbnailsInBackground] Thumbnail generation failed for entry ${entry.id}:`, error);
-          failCount++;
+    const results = await Promise.allSettled(
+      entriesWithVideos.map(async (entry) => {
+        const firstVideoUri = entry.videos?.[0];
+        if (!firstVideoUri) {
+          return null;
         }
-      }
-      console.log(`✅ [resolveVideoThumbnailsInBackground] Complete: ${successCount} success, ${failCount} failed`);
-    }, 1000); // Delay 1 second to not block initial render
+
+        // Prefer already uploaded thumbnail URL first to avoid expensive local generation.
+        const storedThumbnailUri = entry.videoThumbnails?.[firstVideoUri];
+        if (storedThumbnailUri) {
+          return { entryId: entry.id, thumbnailUri: storedThumbnailUri };
+        }
+
+        try {
+          const cachedThumbnailUri = await ensureVideoThumbnailCached(firstVideoUri);
+          if (cachedThumbnailUri) {
+            return { entryId: entry.id, thumbnailUri: cachedThumbnailUri };
+          }
+        } catch {
+        }
+
+        return null;
+      })
+    );
+
+    setVideoThumbnailMap((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled' || !result.value) {
+          return;
+        }
+
+        const { entryId, thumbnailUri } = result.value;
+        if (!thumbnailUri || next[entryId] === thumbnailUri) {
+          return;
+        }
+
+        next[entryId] = thumbnailUri;
+        changed = true;
+      });
+
+      return changed ? next : prev;
+    });
   };
 
   const renderImages = (images: string[], layout: LayoutType = 'grid', title?: string, content?: string) => {
@@ -653,43 +904,29 @@ export default function TimelineScreen({ navigation }: any) {
     const renderVideoPreview = () => {
       if (!item.videos || item.videos.length === 0) return null;
 
-      const shouldRenderVideo = visibleEntryIds.has(item.id);
-      const thumbnailUri = videoThumbnailMap[item.id];
-      const fadeValue = getVideoThumbnailFadeValue(item.id);
+      const firstVideoUri = item.videos[0];
+      const storedThumbnailUri = firstVideoUri ? item.videoThumbnails?.[firstVideoUri] : undefined;
+      const generatedThumbnailUri = videoThumbnailMap[item.id];
+      const thumbnailUri = storedThumbnailUri || generatedThumbnailUri;
 
       return (
         <View style={styles.timelineVideoPreviewContainer}>
           <View style={styles.timelineVideoPreviewCard}>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.timelineVideoPlaceholder,
-                styles.timelineVideoLayer,
-                {
-                  opacity: fadeValue.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [1, 0],
-                  }),
-                },
-              ]}
-            >
-              <Text style={styles.timelineVideoPlaceholderIcon}>🎥</Text>
-            </Animated.View>
-
-            {shouldRenderVideo && thumbnailUri ? (
-              <Animated.Image
+            {thumbnailUri ? (
+              <Image
                 source={{ uri: thumbnailUri }}
-                style={[styles.timelineVideoPreviewPlayer, { opacity: fadeValue }]}
+                style={styles.timelineVideoPreviewPlayer}
                 resizeMode="cover"
                 fadeDuration={0}
-                onLoadEnd={() => {
-                  animateVideoThumbnailFadeIn(item.id);
-                }}
               />
-            ) : null}
+            ) : (
+              <View style={[styles.timelineVideoPlaceholder, styles.timelineVideoLayer]}>
+                <Text style={styles.timelineVideoPlaceholderIcon}>🎥</Text>
+              </View>
+            )}
 
             <View style={styles.timelineVideoBadge}>
-              <Text style={styles.timelineVideoBadgeText}>Video</Text>
+              <Text style={styles.timelineVideoBadgeText}>{t('timeline_video_badge')}</Text>
             </View>
 
             {item.videos.length > 1 && (
@@ -705,7 +942,7 @@ export default function TimelineScreen({ navigation }: any) {
     // Text Overlay Mode
     if (item.textOverlay && item.images.length > 0) {
       return (
-        <View style={styles.entryCard}>
+        <View style={[styles.entryCard, { backgroundColor: theme.colors.background }]}>
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() => {
@@ -734,25 +971,25 @@ export default function TimelineScreen({ navigation }: any) {
               <View style={styles.overlayContent}>
                 <View style={styles.entryHeader}>
                   <View style={styles.dateContainer}>
-                    <Text style={[styles.dayNumber, { color: colors.white }]}>
+                    <Text style={[styles.dayNumber, { color: theme.colors.text }]}>
                       {new Date(item.date).getDate()}
                     </Text>
-                    <Text style={[styles.monthText, { color: colors.white }]}>
-                      {new Date(item.date).toLocaleDateString('fi-FI', { month: 'short' })}
+                    <Text style={[styles.monthText, { color: theme.colors.text }]}>
+                      {new Date(item.date).toLocaleDateString(locale, { month: 'short' })}
                     </Text>
                   </View>
                   
                   <View style={styles.entryHeaderContent}>
-                    <Text style={[styles.entryTitle, { color: colors.white }]} numberOfLines={1}>
+                    <Text style={[styles.entryTitle, { color: theme.colors.text }]} numberOfLines={1}>
                       {item.title}
                     </Text>
-                    <Text style={[styles.entryTime, { color: colors.white }]}>
+                    <Text style={[styles.entryTime, { color: theme.colors.textSecondary }]}>
                       {getTimeAgo(item.date)}
                     </Text>
                   </View>
                 </View>
 
-                <Text style={[styles.entryContent, { color: colors.white }]} numberOfLines={3}>
+                <Text style={[styles.entryContent, { color: theme.colors.text }]} numberOfLines={3}>
                   {item.content}
                 </Text>
 
@@ -762,7 +999,7 @@ export default function TimelineScreen({ navigation }: any) {
                   {item.location && (
                     <View style={styles.locationContainer}>
                       <Text style={styles.locationIcon}>📍</Text>
-                      <Text style={[styles.locationText, { color: colors.white }]} numberOfLines={1}>
+                      <Text style={[styles.locationText, { color: theme.colors.textSecondary }]} numberOfLines={1}>
                         {item.location.address || `${item.location.latitude.toFixed(4)}, ${item.location.longitude.toFixed(4)}`}
                       </Text>
                     </View>
@@ -771,7 +1008,7 @@ export default function TimelineScreen({ navigation }: any) {
                     {item.images.length > 0 && (
                       <View style={styles.stat}>
                         <Text style={styles.statIcon}>📷</Text>
-                        <Text style={[styles.statText, { color: colors.white }]}>{item.images.length}</Text>
+                        <Text style={[styles.statText, { color: theme.colors.text }]}>{item.images.length}</Text>
                       </View>
                     )}
                   </View>
@@ -787,7 +1024,7 @@ export default function TimelineScreen({ navigation }: any) {
     if (item.layout === 'overlay' && item.images.length > 0) {
       return (
         <TouchableOpacity
-          style={styles.entryCard}
+          style={[styles.entryCard, { backgroundColor: theme.colors.background }]}
           activeOpacity={0.7}
           onPress={() => {
             navigation.navigate('EntryDetail', {
@@ -836,7 +1073,7 @@ export default function TimelineScreen({ navigation }: any) {
 
     // Normal Mode
     return (
-    <View style={styles.entryCard}>
+    <View style={[styles.entryCard, { backgroundColor: theme.colors.background }]}>
       <TouchableOpacity
         activeOpacity={0.7}
         onPress={() => {
@@ -857,7 +1094,7 @@ export default function TimelineScreen({ navigation }: any) {
               {new Date(item.date).getDate()}
             </Text>
             <Text style={styles.monthText}>
-              {new Date(item.date).toLocaleDateString('fi-FI', { month: 'short' })}
+              {new Date(item.date).toLocaleDateString(locale, { month: 'short' })}
             </Text>
           </View>
           
@@ -912,7 +1149,7 @@ export default function TimelineScreen({ navigation }: any) {
 };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, themed.screenBg]}>
       {/* Achievement Toast */}
       <AchievementToast
         achievement={achievementToast}
@@ -924,20 +1161,20 @@ export default function TimelineScreen({ navigation }: any) {
       />
 
       <ReminderToast
-        title="Tämän päivän muistutukset"
+        title={t('timeline_reminders_today')}
         message={reminderToastMessage}
         visible={showReminderToast}
         onHide={() => setShowReminderToast(false)}
       />
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, themed.headerBg]}>
         <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>Päiväkirjani</Text>
+          <Text style={[styles.headerTitle, themed.headingText]}>{t('timeline_header')}</Text>
           
           {/* Search Icon */}
           <TouchableOpacity
-            style={styles.searchIconButton}
+            style={[styles.searchIconButton, themed.chipBg]}
             onPress={() => {
               setShowSearch(!showSearch);
               if (showSearch) {
@@ -949,14 +1186,14 @@ export default function TimelineScreen({ navigation }: any) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.reminderButton}
+            style={[styles.reminderButton, themed.chipBg]}
             onPress={() => navigation.navigate('Reminders')}
           >
             <Text style={styles.reminderIconText}>⏰</Text>
           </TouchableOpacity>
           
           <TouchableOpacity
-            style={styles.profileButton}
+            style={[styles.profileButton, themed.chipBg]}
             onPress={() => navigation.navigate('Profile')}
           >
             {profileImage ? (
@@ -966,13 +1203,13 @@ export default function TimelineScreen({ navigation }: any) {
             )}
           </TouchableOpacity>
         </View>
-        
+
         {/* Search Input - Toggleable */}
         {showSearch && (
-          <View style={styles.searchInputContainer}>
+          <View style={[styles.searchInputContainer, themed.searchBg, themed.searchBorder]}>
             <TextInput
-              style={styles.searchInputField}
-              placeholder="Hae merkinnöistä..."
+              style={[styles.searchInputField, themed.searchText]}
+              placeholder={t('timeline_search_placeholder')}
               placeholderTextColor="#999"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -992,38 +1229,33 @@ export default function TimelineScreen({ navigation }: any) {
         )}
       </View>
 
-      {/* Achievements Section - Horizontal Scroll */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.achievementsScroll}
-        style={styles.achievementsContainer}
-      >
-        {achievements.map((achievement) => {
-          const isUnlocked = unlockedAchievementIds.includes(achievement.id);
-          const progress = getAchievementProgress(achievement);
+      {/* Achievements Section */}
+      <View style={styles.achievementsContainer}>
+        <View style={styles.achievementsRowHeader}>
+          <Text style={[styles.achievementsRowTitle, themed.primaryText]}>Seuraavat tavoitteet</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Achievements')}>
+            <Text style={[styles.achievementsRowAction, themed.linkText]}>Nayta kaikki</Text>
+          </TouchableOpacity>
+        </View>
 
-          return (
-            <View
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.achievementsScroll}
+          style={styles.achievementsPendingScroll}
+        >
+          {pendingAchievements.map(({ achievement, progressInfo }) => (
+            <TouchableOpacity
               key={achievement.id}
-              style={[
-                styles.achievementCard,
-                !isUnlocked && styles.achievementCardLocked,
-              ]}
+              style={[styles.achievementCard, styles.achievementCardLocked, themed.cardBg]}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('Achievements')}
             >
-              <Text
-                style={[
-                  styles.achievementCardIcon,
-                  !isUnlocked && styles.achievementCardIconLocked,
-                ]}
-              >
+              <Text style={[styles.achievementCardIcon, styles.achievementCardIconLocked]}>
                 {achievement.icon}
               </Text>
               <Text
-                style={[
-                  styles.achievementCardTitle,
-                  !isUnlocked && styles.achievementCardTitleLocked,
-                ]}
+                style={[styles.achievementCardTitle, styles.achievementCardTitleLocked, themed.cardTitle]}
                 numberOfLines={2}
               >
                 {achievement.name}
@@ -1032,73 +1264,82 @@ export default function TimelineScreen({ navigation }: any) {
                 <View
                   style={[
                     styles.progressBarCompact,
-                    { width: `${progress.progress}%` },
-                    !isUnlocked && styles.progressBarCompactLocked,
+                    { width: `${progressInfo.progress}%` },
+                    styles.progressBarCompactLocked,
+                    themed.progress,
                   ]}
                 />
               </View>
-              <Text
-                style={[
-                  styles.achievementCardProgress,
-                  !isUnlocked && styles.achievementCardProgressLocked,
-                ]}
-              >
-                {Math.min(progress.current, progress.target)} / {progress.target}
+              <Text style={[styles.achievementCardProgress, styles.achievementCardProgressLocked, themed.secondaryText]}>
+                {Math.min(progressInfo.current, progressInfo.target)} / {progressInfo.target}
               </Text>
-              {isUnlocked && (
-                <View style={styles.achievementUnlockedBadge}>
-                  <Text style={styles.achievementUnlockedText}>✓</Text>
-                </View>
-              )}
-            </View>
-          );
-        })}
-      </ScrollView>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+      </View>
+
+      {showGreetingCard && (
+        <View style={styles.greetingBannerHost} pointerEvents="none">
+          <Animated.View
+            style={[
+              styles.dailyGreetingCard,
+              {
+                backgroundColor: greetingPalette.backgroundColor,
+                borderColor: greetingPalette.borderColor,
+                opacity: greetingOpacityAnim,
+                transform: [{ translateY: greetingTranslateAnim }, { scale: greetingScaleAnim }],
+              },
+            ]}
+          >
+            <Text style={[styles.dailyGreetingText, greetingStyleVariant]}>{dailyGreetingText}</Text>
+          </Animated.View>
+        </View>
+      )}
 
       {/* Entries List */}
       <FlatList
         data={filteredEntries}
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={viewabilityConfig}
-        removeClippedSubviews
+        extraData={videoThumbnailMap}
+        removeClippedSubviews={false}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl 
             refreshing={refreshing} 
             onRefresh={onRefresh}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
+            tintColor={theme.colors.primary}
+            colors={[theme.colors.primary]}
           />
         }
         ListEmptyComponent={
           entriesLoading ? (
             <View style={styles.emptyContainer}>
-              <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.loadingEntriesText}>Ladataan merkintöjä...</Text>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={[styles.loadingEntriesText, themed.secondaryText]}>{t('timeline_loading')}</Text>
             </View>
           ) : (
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIconContainer}>
                 <Text style={styles.emptyIcon}>{searchQuery.trim() ? '🔍' : '📖'}</Text>
               </View>
-              <Text style={styles.emptyTitle}>
+              <Text style={[styles.emptyTitle, themed.primaryText]}>
                 {searchQuery.trim()
-                  ? `Ei tuloksia haulle "${searchQuery}"`
-                  : 'Aloita päiväkirjan kirjoittaminen'}
+                  ? t('timeline_no_results_for', { query: searchQuery })
+                  : t('timeline_empty_title')}
               </Text>
-              <Text style={styles.emptySubtitle}>
+              <Text style={[styles.emptySubtitle, themed.secondaryText]}>
                 {searchQuery.trim()
-                  ? 'Kokeile erilaista hakusanaa'
-                  : 'Tallenna muistosi ja hetket helposti\npäivä kerrallaan'}
+                  ? t('timeline_no_results_sub')
+                  : t('timeline_empty_subtitle')}
               </Text>
               {!searchQuery.trim() && (
                 <TouchableOpacity
-                  style={styles.emptyButton}
+                  style={[styles.emptyButton, themed.emptyButtonBg]}
                   onPress={() => navigation.navigate('NewEntry')}
                 >
-                  <Text style={styles.emptyButtonText}>✨ Luo ensimmäinen merkintä</Text>
+                  <Text style={styles.emptyButtonText}>{t('timeline_create_first')}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1109,7 +1350,7 @@ export default function TimelineScreen({ navigation }: any) {
       {/* Floating Action Button */}
       {entries.length > 0 && (
         <TouchableOpacity
-          style={styles.fab}
+          style={[styles.fab, themed.fabBg]}
           onPress={() => navigation.navigate('NewEntry')}
           activeOpacity={0.8}
         >
@@ -1145,6 +1386,27 @@ const styles = StyleSheet.create({
   },
   headerSubtitle: {
     ...commonStyles.bodySecondary,
+  },
+  dailyGreetingCard: {
+    width: '100%',
+    maxWidth: 360,
+    marginBottom: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.xl,
+    borderWidth: 2,
+    ...shadows.sm,
+  },
+  dailyGreetingText: {
+    fontSize: typography.fontSizes.lg,
+    lineHeight: 28,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  greetingBannerHost: {
+    paddingHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    alignItems: 'center',
   },
   searchIconButton: {
     width: 40,
@@ -1210,11 +1472,31 @@ const styles = StyleSheet.create({
   achievementsContainer: {
     marginTop: spacing.md,
     marginBottom: spacing.sm,
-    height: 170,
+  },
+  achievementsRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  achievementsRowTitle: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
+  },
+  achievementsRowAction: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.primary,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  achievementsPendingScroll: {
+    minHeight: 122,
   },
   achievementsScroll: {
     paddingHorizontal: spacing.lg,
     gap: spacing.md,
+    paddingBottom: spacing.xs,
   },
   achievementCard: {
     width: 118,
@@ -1518,15 +1800,16 @@ const styles = StyleSheet.create({
   timelineGridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.xs,
+    justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
   timelineGridImageWrapper: {
     position: 'relative',
-    width: (width - spacing.lg * 2 - spacing.xs) / 2,
+    width: '48.8%',
     height: 120,
     borderRadius: borderRadius.md,
     overflow: 'hidden',
+    marginBottom: spacing.xs,
   },
   timelineGridImage: {
     width: '100%',

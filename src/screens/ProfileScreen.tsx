@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,15 @@ import {
   Alert,
   Image,
   ActivityIndicator,
+  Modal,
+  TextInput,
+  Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import { getEntries, uploadProfileImage, updateUserProfile, getUserProfile } from '../services/diaryService';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
@@ -18,9 +24,15 @@ import { calculateStreaks } from '../utils/achievementUtils';
 
 export default function ProfileScreen({ navigation }: any) {
   const { user, logout, deleteAccount } = useAuth();
-  const [entries, setEntries] = useState<DiaryEntry[]>([]);
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const locale = getLocaleFromLanguage(language);
   const [profileImage, setProfileImage] = useState<string | null>(null);
+
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [showDeletePasswordModal, setShowDeletePasswordModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [stats, setStats] = useState({
     totalEntries: 0,
     totalImages: 0,
@@ -41,11 +53,11 @@ export default function ProfileScreen({ navigation }: any) {
 
     try {
       const profile = await getUserProfile(user.uid);
+
       if (profile?.photoURL) {
         setProfileImage(profile.photoURL);
       }
-    } catch (error) {
-      console.error('Error loading user profile:', error);
+    } catch {
     }
   };
 
@@ -55,7 +67,6 @@ export default function ProfileScreen({ navigation }: any) {
 
     try {
       const userEntries = await getEntries(user.uid);
-      setEntries(userEntries);
 
       // Calculate stats
       const totalImages = userEntries.reduce((sum, entry) => sum + (entry.images?.length || 0), 0);
@@ -71,25 +82,24 @@ export default function ProfileScreen({ navigation }: any) {
         currentStreak: current,
         firstEntryDate: firstEntry ? new Date(firstEntry.date) : null,
       });
-    } catch (error) {
-      console.error('Error loading stats:', error);
+    } catch {
     }
   };
 
   const handleLogout = () => {
     Alert.alert(
-      'Kirjaudu ulos',
-      'Haluatko varmasti kirjautua ulos?',
+      t('profile_logout_confirm_title'),
+      t('profile_logout_confirm_msg'),
       [
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('common_cancel'), style: 'cancel' },
         {
-          text: 'Kirjaudu ulos',
+          text: t('profile_logout_button'),
           style: 'destructive',
           onPress: async () => {
             try {
               await logout();
-            } catch (error) {
-              Alert.alert('Virhe', 'Uloskirjautuminen epäonnistui');
+            } catch {
+              Alert.alert(t('common_error'), t('profile_logout_failed'));
             }
           },
         },
@@ -99,34 +109,26 @@ export default function ProfileScreen({ navigation }: any) {
 
   const handleDeleteAccount = () => {
     Alert.alert(
-      'Poista tili',
-      'Haluatko varmasti poistaa tilisi? Tämä poistaa KAIKKI tietosi pysyvästi (päiväkirjamerkinnät, dokumentit, kuvat). Tätä toimintoa EI VOI peruuttaa!',
+      t('profile_delete_title'),
+      t('profile_delete_confirm1'),
       [
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('common_cancel'), style: 'cancel' },
         {
-          text: 'Poista tili',
+          text: t('profile_delete_button'),
           style: 'destructive',
           onPress: () => {
             // Kaksoisvarmistus
             Alert.alert(
-              'Viimeinen varmistus',
-              'Oletko TÄYSIN VARMA? Kaikki tietosi poistetaan pysyvästi.',
+              t('profile_delete_confirm2_title'),
+              t('profile_delete_confirm2'),
               [
-                { text: 'Peruuta', style: 'cancel' },
+                { text: t('common_cancel'), style: 'cancel' },
                 {
-                  text: 'Kyllä, poista',
+                  text: t('profile_delete_confirm2_yes'),
                   style: 'destructive',
-                  onPress: async () => {
-                    try {
-                      Alert.alert('Poistetaan...', 'Odota hetki, tili poistetaan.');
-                      await deleteAccount();
-                      Alert.alert('Valmis', 'Tilisi on poistettu.');
-                    } catch (error: any) {
-                      Alert.alert(
-                        'Virhe',
-                        error.message || 'Tilin poistaminen epäonnistui. Kokeile kirjautua uudelleen ja yritä sitten uudestaan.'
-                      );
-                    }
+                  onPress: () => {
+                    setDeletePassword('');
+                    setShowDeletePasswordModal(true);
                   },
                 },
               ]
@@ -142,7 +144,7 @@ export default function ProfileScreen({ navigation }: any) {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       
       if (status !== 'granted') {
-        Alert.alert('Lupa tarvitaan', 'Tarvitsemme luvan päästäksemme kuvagalleriaan.');
+        Alert.alert(t('common_permission_required'), t('entry_camera_photo_permission'));
         return;
       }
 
@@ -166,11 +168,10 @@ export default function ProfileScreen({ navigation }: any) {
         // Update local state
         setProfileImage(photoURL);
         
-        Alert.alert('Onnistui!', 'Profiilikuva päivitetty');
+        Alert.alert(t('common_success'), t('settings_profile_image_updated'));
       }
-    } catch (error) {
-      console.error('Error changing profile image:', error);
-      Alert.alert('Virhe', 'Profiilikuvan päivittäminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('settings_profile_image_failed'));
     } finally {
       setUploadingImage(false);
     }
@@ -182,26 +183,44 @@ export default function ProfileScreen({ navigation }: any) {
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
+  const themed = useMemo(
+    () => ({
+      screenBg: { backgroundColor: theme.colors.backgroundLight },
+      headerBg: { backgroundColor: theme.colors.background, borderBottomColor: theme.colors.border },
+      headingText: { color: theme.colors.text, fontFamily: theme.fonts.headingFamily },
+      primaryText: { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+      secondaryText: { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily },
+      cardBg: { backgroundColor: theme.colors.background, borderColor: theme.colors.border },
+      accentBg: { backgroundColor: theme.colors.primary },
+      accentText: { color: theme.colors.primary },
+      modalBg: { backgroundColor: theme.colors.background },
+      inputBg: { borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+      inputPlaceholder: theme.colors.textSecondary,
+      neutralButton: { backgroundColor: theme.colors.backgroundLight },
+    }),
+    [theme],
+  );
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, themed.screenBg]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, themed.headerBg]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backButtonText}>←</Text>
+          <Text style={[styles.backButtonText, themed.accentText]}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>✨ Päiväkirjani</Text>
+        <Text style={[styles.headerTitle, themed.headingText]}>{t('profile_header')}</Text>
         <View style={styles.backButton} />
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* User Info Card */}
-        <View style={styles.userCard}>
+        <View style={[styles.userCard, themed.cardBg]}>
           <TouchableOpacity 
             style={styles.avatarContainer} 
             onPress={handleChangeProfileImage}
             disabled={uploadingImage}
           >
-            <View style={styles.avatar}>
+            <View style={[styles.avatar, themed.accentBg]}>
               {uploadingImage ? (
                 <ActivityIndicator size="large" color={colors.white} />
               ) : profileImage ? (
@@ -212,48 +231,47 @@ export default function ProfileScreen({ navigation }: any) {
                 </Text>
               )}
             </View>
-            <View style={styles.editBadge}>
+            <View style={[styles.editBadge, themed.accentBg]}>
               <Text style={styles.editBadgeText}>✏️</Text>
             </View>
           </TouchableOpacity>
-          <Text style={styles.userName}>{user?.displayName || 'Käyttäjä'}</Text>
-          <Text style={styles.userEmail}>{user?.email}</Text>
+          <Text style={[styles.userEmail, themed.secondaryText]}>{user?.email}</Text>
         </View>
 
         {/* Stats Grid */}
         <View style={styles.statsContainer}>
-          <Text style={styles.sectionTitle}>Tilastot</Text>
+          <Text style={[styles.sectionTitle, themed.primaryText]}>{t('profile_stats_title')}</Text>
           
           <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.totalEntries}</Text>
-              <Text style={styles.statLabel}>Merkintää</Text>
+            <View style={[styles.statCard, themed.cardBg]}>
+              <Text style={[styles.statNumber, themed.accentText]}>{stats.totalEntries}</Text>
+              <Text style={[styles.statLabel, themed.secondaryText]}>{t('profile_entries')}</Text>
             </View>
             
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.totalImages}</Text>
-              <Text style={styles.statLabel}>Kuvaa</Text>
+            <View style={[styles.statCard, themed.cardBg]}>
+              <Text style={[styles.statNumber, themed.accentText]}>{stats.totalImages}</Text>
+              <Text style={[styles.statLabel, themed.secondaryText]}>{t('profile_images')}</Text>
             </View>
           </View>
 
           <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.currentStreak}</Text>
-              <Text style={styles.statLabel}>Päivän putki</Text>
+            <View style={[styles.statCard, themed.cardBg]}>
+              <Text style={[styles.statNumber, themed.accentText]}>{stats.currentStreak}</Text>
+              <Text style={[styles.statLabel, themed.secondaryText]}>{t('profile_streak')}</Text>
             </View>
             
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.longestStreak}</Text>
-              <Text style={styles.statLabel}>Pisin putki</Text>
+            <View style={[styles.statCard, themed.cardBg]}>
+              <Text style={[styles.statNumber, themed.accentText]}>{stats.longestStreak}</Text>
+              <Text style={[styles.statLabel, themed.secondaryText]}>{t('profile_longest_streak')}</Text>
             </View>
           </View>
 
           {stats.firstEntryDate && (
-            <View style={styles.fullStatCard}>
-              <Text style={styles.statNumber}>{getDaysWriting()}</Text>
-              <Text style={styles.statLabel}>Päivää kirjoittanut</Text>
-              <Text style={styles.statSubLabel}>
-                Aloitettu {stats.firstEntryDate.toLocaleDateString('fi-FI', {
+            <View style={[styles.fullStatCard, themed.cardBg]}>
+              <Text style={[styles.statNumber, themed.accentText]}>{getDaysWriting()}</Text>
+              <Text style={[styles.statLabel, themed.secondaryText]}>{t('profile_days_written')}</Text>
+              <Text style={[styles.statSubLabel, themed.secondaryText]}>
+                {t('profile_started')} {stats.firstEntryDate.toLocaleDateString(locale, {
                   day: 'numeric',
                   month: 'long',
                   year: 'numeric',
@@ -266,63 +284,143 @@ export default function ProfileScreen({ navigation }: any) {
         {/* Saavutukset-linkki */}
         <View style={styles.settingsContainer}>
           <TouchableOpacity
-            style={styles.achievementsButton}
+            style={[styles.achievementsButton, themed.cardBg]}
             onPress={() => navigation.navigate('Achievements')}
           >
             <View style={styles.achievementsButtonContent}>
               <Text style={styles.achievementsButtonIcon}>🏆</Text>
               <View style={styles.achievementsButtonTextContainer}>
-                <Text style={styles.achievementsButtonTitle}>Saavutukset</Text>
-                <Text style={styles.achievementsButtonSubtitle}>
-                  Katso kaikki saavutuksesi
+                <Text style={[styles.achievementsButtonTitle, themed.primaryText]}>{t('profile_achievements_title')}</Text>
+                <Text style={[styles.achievementsButtonSubtitle, themed.secondaryText]}>
+                  {t('profile_achievements_subtitle')}
                 </Text>
               </View>
             </View>
-            <Text style={styles.achievementsButtonArrow}>›</Text>
+            <Text style={[styles.achievementsButtonArrow, themed.secondaryText]}>›</Text>
           </TouchableOpacity>
         </View>
 
         {/* Asetukset-linkki */}
         <View style={styles.settingsContainer}>
           <TouchableOpacity
-            style={styles.achievementsButton}
+            style={[styles.achievementsButton, themed.cardBg]}
             onPress={() => navigation.navigate('Settings')}
           >
             <View style={styles.achievementsButtonContent}>
               <Text style={styles.achievementsButtonIcon}>⚙️</Text>
               <View style={styles.achievementsButtonTextContainer}>
-                <Text style={styles.achievementsButtonTitle}>Asetukset</Text>
-                <Text style={styles.achievementsButtonSubtitle}>
-                  Hallitse sovelluksen asetuksia
+                <Text style={[styles.achievementsButtonTitle, themed.primaryText]}>{t('profile_settings_title')}</Text>
+                <Text style={[styles.achievementsButtonSubtitle, themed.secondaryText]}>
+                  {t('profile_settings_subtitle')}
                 </Text>
               </View>
             </View>
-            <Text style={styles.achievementsButtonArrow}>›</Text>
+            <Text style={[styles.achievementsButtonArrow, themed.secondaryText]}>›</Text>
           </TouchableOpacity>
         </View>
 
         {/* Asetukset */}
         <View style={styles.settingsContainer}>
-          <Text style={styles.sectionTitle}>Asetukset</Text>
+          <Text style={[styles.sectionTitle, themed.primaryText]}>{t('profile_settings_title')}</Text>
         </View>
 
         {/* Actions */}
         <View style={styles.actionsContainer}>
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutIcon}>👋</Text>
-            <Text style={styles.logoutText}>Kirjaudu ulos</Text>
+            <Text style={styles.logoutText}>{t('profile_logout')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
-            <Text style={styles.deleteIcon}>⚠️</Text>
-            <Text style={styles.deleteText}>Poista tili</Text>
+            <Text style={styles.deleteText}>{t('profile_delete_account')}</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>My Day App v1.0</Text>
+          <Text style={[styles.footerText, themed.secondaryText, { fontFamily: theme.fonts.bodyFamily }]}>
+            {t('profile_footer')}
+          </Text>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showDeletePasswordModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deletingAccount) {
+            setShowDeletePasswordModal(false);
+          }
+        }}
+      >
+        <View style={styles.deleteModalBackdrop}>
+          <View style={[styles.deleteModalCard, themed.modalBg]}>
+            <Text style={[styles.deleteModalTitle, themed.primaryText]}>{t('profile_delete_modal_title')}</Text>
+            <Text style={[styles.deleteModalText, themed.secondaryText]}>
+              {t('profile_delete_modal_body')}
+            </Text>
+
+            <TextInput
+              style={[styles.deletePasswordInput, themed.inputBg]}
+              placeholder={t('profile_delete_modal_placeholder')}
+              placeholderTextColor={themed.inputPlaceholder}
+              secureTextEntry
+              editable={!deletingAccount}
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity
+                style={[styles.deleteModalButton, styles.deleteModalCancelButton]}
+                onPress={() => {
+                  if (!deletingAccount) {
+                    setShowDeletePasswordModal(false);
+                    setDeletePassword('');
+                  }
+                }}
+                disabled={deletingAccount}
+              >
+                <Text style={[styles.deleteModalCancelText, themed.primaryText]}>{t('common_cancel')}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.deleteModalButton,
+                  styles.deleteModalDeleteButton,
+                  (!deletePassword.trim() || deletingAccount) && styles.deleteModalDeleteButtonDisabled,
+                ]}
+                onPress={async () => {
+                  if (!deletePassword.trim()) {
+                    return;
+                  }
+
+                  try {
+                    setDeletingAccount(true);
+                    await deleteAccount(deletePassword);
+                    setShowDeletePasswordModal(false);
+                    setDeletePassword('');
+                    Alert.alert(t('profile_delete_success_title'), t('profile_delete_success'));
+                  } catch (error: any) {
+                    Alert.alert(
+                      t('common_error'),
+                      error?.message || t('profile_delete_failed')
+                    );
+                  } finally {
+                    setDeletingAccount(false);
+                  }
+                }}
+                disabled={!deletePassword.trim() || deletingAccount}
+              >
+                <Text style={styles.deleteModalDeleteText}>
+                  {deletingAccount ? t('common_deleting') : t('profile_delete_button')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -583,5 +681,72 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: typography.fontSizes.sm,
     color: colors.textSecondary,
+    fontStyle: 'italic',
+    fontFamily: Platform.select({
+      ios: 'Snell Roundhand',
+      android: 'cursive',
+      default: undefined,
+    }),
+  },
+  deleteModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  deleteModalCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    ...shadows.md,
+  },
+  deleteModalTitle: {
+    fontSize: typography.fontSizes.lg,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  deleteModalText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+    lineHeight: 20,
+  },
+  deletePasswordInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: typography.fontSizes.md,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  deleteModalButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  deleteModalButton: {
+    flex: 1,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  deleteModalCancelButton: {
+    backgroundColor: colors.gray100,
+  },
+  deleteModalCancelText: {
+    color: colors.text,
+    fontWeight: typography.fontWeights.medium,
+  },
+  deleteModalDeleteButton: {
+    backgroundColor: colors.error,
+  },
+  deleteModalDeleteButtonDisabled: {
+    opacity: 0.6,
+  },
+  deleteModalDeleteText: {
+    color: colors.white,
+    fontWeight: typography.fontWeights.semibold,
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,31 +10,42 @@ import {
   Modal,
   ScrollView,
   ActivityIndicator,
+  SafeAreaView,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
-import { 
-  getDocuments, 
-  createDocument, 
-  uploadDocumentFile, 
-  deleteDocument 
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
+import {
+  getDocuments,
+  createDocument,
+  uploadDocumentFile,
+  deleteDocument,
 } from '../services/documentService';
 import { Document, DocumentCategory, DOCUMENT_CATEGORIES } from '../types/Document';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
+type FilterCategory = DocumentCategory | 'all';
+
+const CATEGORY_ORDER: DocumentCategory[] = ['receipt', 'contract', 'invoice', 'certificate', 'other'];
+
 export default function DocumentsScreen({ navigation }: any) {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
+
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [filteredDocuments, setFilteredDocuments] = useState<Document[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<DocumentCategory | 'all'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<FilterCategory>('all');
   const [loading, setLoading] = useState(true);
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [uploading, setUploading] = useState(false);
-
-  // New document form
   const [newDoc, setNewDoc] = useState({
     title: '',
     description: '',
@@ -43,66 +54,119 @@ export default function DocumentsScreen({ navigation }: any) {
     tags: '',
   });
 
-  useEffect(() => {
-    if (user) {
-      loadDocuments();
-    }
-  }, [user]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (user) {
-        loadDocuments();
-      }
-    }, [user])
-  );
-
-  useEffect(() => {
-    filterDocuments();
-  }, [documents, searchQuery, selectedCategory]);
-
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     if (!user) return;
 
     try {
       setLoading(true);
       const docs = await getDocuments(user.uid);
       setDocuments(docs);
-    } catch (error) {
-      console.error('Error loading documents:', error);
-      Alert.alert('Virhe', 'Dokumenttien lataaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('documents_load_failed'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [t, user]);
 
-  const filterDocuments = () => {
-    let filtered = [...documents];
+  useEffect(() => {
+    void loadDocuments();
+  }, [loadDocuments]);
 
-    // Filter by category
+  useFocusEffect(
+    useCallback(() => {
+      void loadDocuments();
+    }, [loadDocuments]),
+  );
+
+  const categoryLabel = useCallback((category: DocumentCategory): string => {
+    switch (category) {
+      case 'receipt':
+        return t('doc_category_receipt');
+      case 'contract':
+        return t('doc_category_contract');
+      case 'invoice':
+        return t('doc_category_invoice');
+      case 'certificate':
+        return t('doc_category_certificate');
+      default:
+        return t('doc_category_other');
+    }
+  }, [t]);
+
+  const filteredDocuments = useMemo(() => {
+    let next = [...documents];
+
     if (selectedCategory !== 'all') {
-      filtered = filtered.filter(doc => doc.category === selectedCategory);
+      next = next.filter((doc) => doc.category === selectedCategory);
     }
 
-    // Filter by search
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(doc =>
-        doc.title.toLowerCase().includes(query) ||
-        doc.description?.toLowerCase().includes(query) ||
-        doc.tags.some(tag => tag.toLowerCase().includes(query))
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return next;
+
+    return next.filter((doc) =>
+      doc.title.toLowerCase().includes(query) ||
+      doc.description?.toLowerCase().includes(query) ||
+      doc.tags.some((tag) => tag.toLowerCase().includes(query)),
+    );
+  }, [documents, searchQuery, selectedCategory]);
+
+  const uploadSelectedFile = async (uri: string, fileType: string, fileName: string) => {
+    if (!user) return;
+
+    if (!newDoc.title.trim()) {
+      Alert.alert(t('documents_missing_title'), t('documents_missing_title_msg'));
+      return;
+    }
+
+    try {
+      setUploading(true);
+
+      const fileUrl = await uploadDocumentFile(uri, user.uid, fileName, fileType);
+      const tags = newDoc.tags
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+
+      await createDocument(
+        {
+          title: newDoc.title,
+          description: newDoc.description,
+          category: newDoc.category,
+          fileUrl,
+          fileName,
+          fileType,
+          fileSize: 0,
+          thumbnailUrl: fileType === 'image' ? fileUrl : undefined,
+          date: newDoc.date,
+          tags,
+          userId: user.uid,
+        },
+        user.uid,
       );
-    }
 
-    setFilteredDocuments(filtered);
+      setNewDoc({
+        title: '',
+        description: '',
+        category: 'other',
+        date: new Date(),
+        tags: '',
+      });
+      setShowAddModal(false);
+      await loadDocuments();
+
+      Alert.alert(t('common_success'), t('documents_save_success'));
+    } catch {
+      Alert.alert(t('common_error'), t('documents_save_failed'));
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handlePickImage = async () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
       if (status !== 'granted') {
-        Alert.alert('Lupa tarvitaan', 'Tarvitsemme luvan päästäksemme kuvagalleriaan.');
+        Alert.alert(t('common_permission_required'), t('documents_gallery_permission'));
         return;
       }
 
@@ -112,21 +176,20 @@ export default function DocumentsScreen({ navigation }: any) {
         allowsEditing: false,
       });
 
-      if (!result.canceled && result.assets && result.assets[0]) {
-        await uploadDocument(result.assets[0].uri, 'image', result.assets[0].fileName || 'image.jpg');
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0];
+        await uploadSelectedFile(asset.uri, 'image', asset.fileName || 'image.jpg');
       }
-    } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Virhe', 'Kuvan valitseminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('documents_image_failed'));
     }
   };
 
   const handleTakePhoto = async () => {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      
       if (status !== 'granted') {
-        Alert.alert('Lupa tarvitaan', 'Tarvitsemme luvan kameraan.');
+        Alert.alert(t('common_permission_required'), t('documents_camera_permission'));
         return;
       }
 
@@ -135,124 +198,77 @@ export default function DocumentsScreen({ navigation }: any) {
         allowsEditing: false,
       });
 
-      if (!result.canceled && result.assets && result.assets[0]) {
-        await uploadDocument(result.assets[0].uri, 'image', 'photo.jpg');
+      if (!result.canceled && result.assets?.[0]) {
+        await uploadSelectedFile(result.assets[0].uri, 'image', 'photo.jpg');
       }
-    } catch (error) {
-      console.error('Error taking photo:', error);
-      Alert.alert('Virhe', 'Kuvan ottaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('documents_camera_failed'));
     }
   };
 
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        type: [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ],
         copyToCacheDirectory: true,
       });
 
-      if (!result.canceled && result.assets && result.assets[0]) {
+      if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0];
         const fileType = asset.mimeType?.includes('pdf') ? 'pdf' : 'docx';
-        await uploadDocument(asset.uri, fileType, asset.name);
+        await uploadSelectedFile(asset.uri, fileType, asset.name);
       }
-    } catch (error) {
-      console.error('Error picking document:', error);
-      Alert.alert('Virhe', 'Dokumentin valitseminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('documents_pick_failed'));
     }
   };
 
-  const uploadDocument = async (uri: string, fileType: string, fileName: string) => {
-    if (!user) return;
-    if (!newDoc.title.trim()) {
-      Alert.alert('Puuttuva otsikko', 'Anna dokumentille otsikko.');
-      return;
-    }
-
-    try {
-      setUploading(true);
-
-      // Upload file to Firebase Storage
-      const fileUrl = await uploadDocumentFile(uri, user.uid, fileName, fileType);
-
-      // Create document record
-      const tags = newDoc.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
-      
-      await createDocument(
-        {
-          title: newDoc.title,
-          description: newDoc.description,
-          category: newDoc.category,
-          fileUrl,
-          fileName,
-          fileType,
-          fileSize: 0, // Could get actual size from file
-          thumbnailUrl: fileType === 'image' ? fileUrl : undefined,
-          date: newDoc.date,
-          tags,
-          userId: user.uid,
+  const handleDeleteDocument = useCallback((doc: Document) => {
+    Alert.alert(t('documents_delete_title'), t('documents_delete_confirm', { title: doc.title }), [
+      { text: t('common_cancel'), style: 'cancel' },
+      {
+        text: t('common_delete'),
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteDocument(doc.id);
+            await loadDocuments();
+            Alert.alert(t('common_deleted'), t('documents_deleted'));
+          } catch {
+            Alert.alert(t('common_error'), t('documents_delete_failed'));
+          }
         },
-        user.uid
-      );
+      },
+    ]);
+  }, [loadDocuments, t]);
 
-      // Reset form
-      setNewDoc({
-        title: '',
-        description: '',
-        category: 'other',
-        date: new Date(),
-        tags: '',
-      });
-      
-      setShowAddModal(false);
-      await loadDocuments();
-      
-      Alert.alert('Onnistui!', 'Dokumentti tallennettu');
-    } catch (error) {
-      console.error('Error uploading document:', error);
-      Alert.alert('Virhe', 'Dokumentin tallentaminen epäonnistui');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleDeleteDocument = (doc: Document) => {
-    Alert.alert(
-      'Poista dokumentti',
-      `Haluatko varmasti poistaa dokumentin "${doc.title}"?`,
-      [
-        { text: 'Peruuta', style: 'cancel' },
-        {
-          text: 'Poista',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteDocument(doc.id);
-              await loadDocuments();
-              Alert.alert('Poistettu', 'Dokumentti poistettu');
-            } catch (error) {
-              Alert.alert('Virhe', 'Dokumentin poistaminen epäonnistui');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const renderDocument = ({ item }: { item: Document }) => {
+  const renderDocument = useCallback(({ item }: { item: Document }) => {
     const category = DOCUMENT_CATEGORIES[item.category];
-    
+
     return (
       <TouchableOpacity
-        style={styles.documentCard}
-        onPress={() => navigation.navigate('DocumentDetail', { 
-          document: {
-            ...item,
-            date: item.date.toISOString(),
-            createdAt: item.createdAt.toISOString(),
-            updatedAt: item.updatedAt.toISOString(),
-          }
-        })}
+        style={[
+          styles.documentCard,
+          {
+            backgroundColor: isDark ? '#111827' : theme.colors.white,
+            borderColor: theme.colors.border,
+            borderWidth: 1,
+          },
+        ]}
+        onPress={() =>
+          navigation.navigate('DocumentDetail', {
+            document: {
+              ...item,
+              date: item.date.toISOString(),
+              createdAt: item.createdAt.toISOString(),
+              updatedAt: item.updatedAt.toISOString(),
+            },
+          })
+        }
         onLongPress={() => handleDeleteDocument(item)}
       >
         <View style={styles.documentHeader}>
@@ -260,113 +276,108 @@ export default function DocumentsScreen({ navigation }: any) {
             <Text style={styles.categoryIcon}>{category.icon}</Text>
           </View>
           <View style={styles.documentInfo}>
-            <Text style={styles.documentTitle} numberOfLines={1}>{item.title}</Text>
-            <Text style={styles.documentDate}>
-              {new Date(item.date).toLocaleDateString('fi-FI')}
+            <Text style={[styles.documentTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]} numberOfLines={1}>
+              {item.title}
             </Text>
+            <Text style={[styles.documentDate, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{new Date(item.date).toLocaleDateString(locale)}</Text>
           </View>
-          <View style={styles.fileTypeBadge}>
-            <Text style={styles.fileTypeText}>{item.fileType.toUpperCase()}</Text>
+          <View style={[styles.fileTypeBadge, { backgroundColor: isDark ? '#1E293B' : colors.gray100 }]}>
+            <Text style={[styles.fileTypeText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{item.fileType.toUpperCase()}</Text>
           </View>
         </View>
-        
-        {item.description && (
-          <Text style={styles.documentDescription} numberOfLines={2}>
+
+        {item.description ? (
+          <Text style={[styles.documentDescription, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]} numberOfLines={2}>
             {item.description}
           </Text>
-        )}
-        
-        {item.tags.length > 0 && (
+        ) : null}
+
+        {item.tags.length > 0 ? (
           <View style={styles.tagsContainer}>
             {item.tags.slice(0, 3).map((tag, index) => (
-              <View key={index} style={styles.tag}>
-                <Text style={styles.tagText}>{tag}</Text>
+              <View key={`${item.id}-${index}`} style={styles.tag}>
+                <Text style={[styles.tagText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{tag}</Text>
               </View>
             ))}
-            {item.tags.length > 3 && (
-              <Text style={styles.moreTagsText}>+{item.tags.length - 3}</Text>
-            )}
+            {item.tags.length > 3 ? <Text style={[styles.moreTagsText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>+{item.tags.length - 3}</Text> : null}
           </View>
-        )}
+        ) : null}
       </TouchableOpacity>
     );
-  };
+  }, [handleDeleteDocument, locale, navigation]);
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Dokumentit</Text>
-        <Text style={styles.headerSubtitle}>
-          {documents.length} {documents.length === 1 ? 'dokumentti' : 'dokumenttia'}
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }] }>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('documents_header')}</Text>
+        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+          {t(documents.length === 1 ? 'documents_count_one' : 'documents_count_many', {
+            n: documents.length,
+          })}
         </Text>
       </View>
 
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Hae dokumentteja..."
-          placeholderTextColor="#999"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity
-            onPress={() => setSearchQuery('')}
-            style={styles.clearButton}
-          >
-            <Text style={styles.clearButtonText}>×</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      <View style={[styles.controlsContainer, { backgroundColor: theme.colors.background }] }>
+        <View style={[styles.searchContainer, { backgroundColor: isDark ? '#0B1220' : theme.colors.white, borderColor: theme.colors.border }] }>
+          <Text style={styles.searchIcon}>🔍</Text>
+          <TextInput
+            style={[styles.searchInput, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+            placeholder={t('documents_search_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {searchQuery.length > 0 ? (
+            <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}>
+              <Text style={[styles.clearButtonText, { color: theme.colors.textSecondary }]}>×</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
 
-      {/* Category Filter */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.categoryScroll}
-        contentContainerStyle={styles.categoryScrollContent}
-      >
-        <TouchableOpacity
-          style={[
-            styles.categoryChip,
-            selectedCategory === 'all' && styles.categoryChipActive
-          ]}
-          onPress={() => setSelectedCategory('all')}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.categoryScroll}
+          contentContainerStyle={styles.categoryScrollContent}
         >
-          <Text style={[
-            styles.categoryChipText,
-            selectedCategory === 'all' && styles.categoryChipTextActive
-          ]}>
-            Kaikki
-          </Text>
-        </TouchableOpacity>
-        
-        {Object.entries(DOCUMENT_CATEGORIES).map(([key, value]) => (
           <TouchableOpacity
-            key={key}
             style={[
               styles.categoryChip,
-              selectedCategory === key && styles.categoryChipActive
+              { backgroundColor: isDark ? '#1E293B' : colors.gray100, borderColor: theme.colors.border },
+              selectedCategory === 'all' && [styles.categoryChipActive, { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }],
             ]}
-            onPress={() => setSelectedCategory(key as DocumentCategory)}
+            onPress={() => setSelectedCategory('all')}
           >
-            <Text style={styles.categoryChipIcon}>{value.icon}</Text>
-            <Text style={[
-              styles.categoryChipText,
-              selectedCategory === key && styles.categoryChipTextActive
-            ]}>
-              {value.label}
+            <Text style={[styles.categoryChipText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }, selectedCategory === 'all' && styles.categoryChipTextActive]}>
+              {t('documents_all')}
             </Text>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
 
-      {/* Documents List */}
+          {CATEGORY_ORDER.map((key) => {
+            const value = DOCUMENT_CATEGORIES[key];
+            const isActive = selectedCategory === key;
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.categoryChip,
+                  { backgroundColor: isDark ? '#1E293B' : colors.gray100, borderColor: theme.colors.border },
+                  isActive && [styles.categoryChipActive, { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setSelectedCategory(key)}
+              >
+                <Text style={styles.categoryChipIcon}>{value.icon}</Text>
+                <Text style={[styles.categoryChipText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }, isActive && styles.categoryChipTextActive]}>
+                  {categoryLabel(key)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -377,121 +388,126 @@ export default function DocumentsScreen({ navigation }: any) {
           renderItem={renderDocument}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>📄</Text>
-              <Text style={styles.emptyTitle}>
-                {searchQuery.trim() ? 'Ei tuloksia' : 'Ei dokumentteja'}
+              <Text style={[styles.emptyTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>
+                {searchQuery.trim() ? t('documents_no_results') : t('documents_empty')}
               </Text>
-              <Text style={styles.emptySubtitle}>
-                {searchQuery.trim() 
-                  ? 'Kokeile erilaista hakusanaa'
-                  : 'Aloita lisäämällä ensimmäinen dokumentti'}
+              <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                {searchQuery.trim() ? t('documents_no_results_sub') : t('documents_empty_sub')}
               </Text>
             </View>
           }
         />
       )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowAddModal(true)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabIcon}>+</Text>
+      <TouchableOpacity style={[styles.fab, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }]} onPress={() => setShowAddModal(true)} activeOpacity={0.85}>
+        <Text style={[styles.fabIcon, { fontFamily: theme.fonts.bodyFamily }]}>+</Text>
       </TouchableOpacity>
 
-      {/* Add Document Modal */}
       <Modal
         visible={showAddModal}
         animationType="slide"
-        transparent={true}
+        transparent
         onRequestClose={() => setShowAddModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Lisää dokumentti</Text>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.white }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: theme.colors.border }]}>
+              <Text style={[styles.modalTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('documents_add_title')}</Text>
               <TouchableOpacity onPress={() => setShowAddModal(false)}>
-                <Text style={styles.modalClose}>×</Text>
+                <Text style={[styles.modalClose, { color: theme.colors.textSecondary }]}>×</Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.modalBody}>
-              <Text style={styles.label}>Otsikko *</Text>
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={styles.modalBodyContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_title_label')}</Text>
               <TextInput
-                style={styles.input}
-                placeholder="Esim. Kaupan kuitti 02/2026"
+                style={[styles.input, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+                placeholder={t('documents_title_placeholder')}
+                placeholderTextColor={theme.colors.textSecondary}
                 value={newDoc.title}
-                onChangeText={(text) => setNewDoc({ ...newDoc, title: text })}
+                onChangeText={(text) => setNewDoc((prev) => ({ ...prev, title: text }))}
               />
 
-              <Text style={styles.label}>Kuvaus</Text>
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_description_label')}</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="Lisätietoja dokumentista..."
+                style={[styles.input, styles.textArea, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+                placeholder={t('documents_description_placeholder')}
+                placeholderTextColor={theme.colors.textSecondary}
                 value={newDoc.description}
-                onChangeText={(text) => setNewDoc({ ...newDoc, description: text })}
+                onChangeText={(text) => setNewDoc((prev) => ({ ...prev, description: text }))}
                 multiline
                 numberOfLines={3}
               />
 
-              <Text style={styles.label}>Kategoria</Text>
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_category_label')}</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.categorySelect}>
-                  {Object.entries(DOCUMENT_CATEGORIES).map(([key, value]) => (
-                    <TouchableOpacity
-                      key={key}
-                      style={[
-                        styles.categoryOption,
-                        newDoc.category === key && styles.categoryOptionActive
-                      ]}
-                      onPress={() => setNewDoc({ ...newDoc, category: key as DocumentCategory })}
-                    >
-                      <Text style={styles.categoryOptionIcon}>{value.icon}</Text>
-                      <Text style={styles.categoryOptionText}>{value.label}</Text>
-                    </TouchableOpacity>
-                  ))}
+                  {CATEGORY_ORDER.map((key) => {
+                    const value = DOCUMENT_CATEGORIES[key];
+                    const isActive = newDoc.category === key;
+                    return (
+                      <TouchableOpacity
+                        key={`modal-${key}`}
+                        style={[
+                          styles.categoryOption,
+                          { backgroundColor: isDark ? '#1E293B' : colors.gray50, borderColor: theme.colors.border },
+                          isActive && [styles.categoryOptionActive, { borderColor: theme.colors.primary, backgroundColor: isDark ? '#0F172A' : colors.primaryLight + '20' }],
+                        ]}
+                        onPress={() => setNewDoc((prev) => ({ ...prev, category: key }))}
+                      >
+                        <Text style={styles.categoryOptionIcon}>{value.icon}</Text>
+                        <Text style={[styles.categoryOptionText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{categoryLabel(key)}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </ScrollView>
 
-              <Text style={styles.label}>Tagit (pilkulla eroteltuna)</Text>
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_tags_label')}</Text>
               <TextInput
-                style={styles.input}
-                placeholder="Esim. ruokakauppa, S-market, elintarvikkeet"
+                style={[styles.input, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+                placeholder={t('documents_tags_placeholder')}
+                placeholderTextColor={theme.colors.textSecondary}
                 value={newDoc.tags}
-                onChangeText={(text) => setNewDoc({ ...newDoc, tags: text })}
+                onChangeText={(text) => setNewDoc((prev) => ({ ...prev, tags: text }))}
               />
 
-              <Text style={styles.sectionTitle}>Valitse tiedosto</Text>
-              
-              <TouchableOpacity style={styles.actionButton} onPress={handleTakePhoto}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_select_file')}</Text>
+
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50, borderColor: theme.colors.border }]} onPress={handleTakePhoto}>
                 <Text style={styles.actionButtonIcon}>📷</Text>
-                <Text style={styles.actionButtonText}>Ota kuva</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_take_photo')}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.actionButton} onPress={handlePickImage}>
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50, borderColor: theme.colors.border }]} onPress={handlePickImage}>
                 <Text style={styles.actionButtonIcon}>🖼️</Text>
-                <Text style={styles.actionButtonText}>Valitse kuva</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_pick_image')}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.actionButton} onPress={handlePickDocument}>
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50, borderColor: theme.colors.border }]} onPress={handlePickDocument}>
                 <Text style={styles.actionButtonIcon}>📎</Text>
-                <Text style={styles.actionButtonText}>Valitse PDF/DOCX</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_pick_pdf')}</Text>
               </TouchableOpacity>
             </ScrollView>
 
-            {uploading && (
+            {uploading ? (
               <View style={styles.uploadingOverlay}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.uploadingText}>Tallennetaan...</Text>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={[styles.uploadingText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('documents_uploading')}</Text>
               </View>
-            )}
+            ) : null}
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -502,7 +518,7 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: colors.white,
-    paddingTop: 60,
+    paddingTop: spacing.md,
     paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
     borderBottomWidth: 1,
@@ -516,12 +532,16 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     ...commonStyles.bodySecondary,
   },
+  controlsContainer: {
+    backgroundColor: colors.backgroundLight,
+    paddingTop: spacing.sm,
+  },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.white,
     marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
+    marginTop: spacing.xs,
     marginBottom: spacing.sm,
     paddingHorizontal: spacing.md,
     borderRadius: borderRadius.lg,
@@ -540,30 +560,37 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   clearButton: {
-    padding: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs,
   },
   clearButtonText: {
     fontSize: 24,
     color: colors.textSecondary,
+    lineHeight: 24,
   },
   categoryScroll: {
-    maxHeight: 50,
+    maxHeight: 64,
   },
   categoryScrollContent: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    alignItems: 'center',
   },
   categoryChip: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+    minHeight: 42,
     marginRight: spacing.sm,
     borderRadius: borderRadius.full,
     backgroundColor: colors.gray100,
+    borderWidth: 1,
+    borderColor: colors.gray200,
   },
   categoryChipActive: {
     backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   categoryChipIcon: {
     fontSize: 16,
@@ -571,6 +598,7 @@ const styles = StyleSheet.create({
   },
   categoryChipText: {
     fontSize: typography.fontSizes.sm,
+    lineHeight: typography.fontSizes.sm + 4,
     color: colors.text,
     fontWeight: typography.fontWeights.medium,
   },
@@ -583,7 +611,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   listContent: {
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxxl + spacing.xxl,
   },
   documentCard: {
     backgroundColor: colors.white,
@@ -660,7 +690,7 @@ const styles = StyleSheet.create({
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 80,
+    paddingTop: spacing.xxxl,
     paddingHorizontal: spacing.xl,
   },
   emptyIcon: {
@@ -693,6 +723,7 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: colors.white,
     fontWeight: typography.fontWeights.bold,
+    lineHeight: 34,
   },
   modalOverlay: {
     flex: 1,
@@ -722,9 +753,13 @@ const styles = StyleSheet.create({
     fontSize: 36,
     color: colors.textSecondary,
     fontWeight: typography.fontWeights.bold,
+    lineHeight: 36,
   },
   modalBody: {
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  modalBodyContent: {
+    paddingBottom: spacing.xxl,
   },
   label: {
     fontSize: typography.fontSizes.sm,
@@ -756,6 +791,7 @@ const styles = StyleSheet.create({
   categorySelect: {
     flexDirection: 'row',
     gap: spacing.sm,
+    paddingBottom: spacing.xs,
   },
   categoryOption: {
     alignItems: 'center',
@@ -764,7 +800,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gray50,
     borderWidth: 2,
     borderColor: 'transparent',
-    minWidth: 80,
+    minWidth: 86,
   },
   categoryOptionActive: {
     borderColor: colors.primary,

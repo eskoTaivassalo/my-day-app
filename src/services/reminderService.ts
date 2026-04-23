@@ -26,7 +26,6 @@ export const getReminders = async (): Promise<Reminder[]> => {
     const reminders: Reminder[] = JSON.parse(data);
     return reminders.sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
   } catch (error) {
-    console.error('Error loading reminders:', error);
     return [];
   }
 };
@@ -37,7 +36,6 @@ export const saveReminder = async (reminder: Reminder): Promise<void> => {
     const next = [reminder, ...reminders];
     await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(next));
   } catch (error) {
-    console.error('Error saving reminder:', error);
   }
 };
 
@@ -51,7 +49,6 @@ export const deleteReminder = async (
       try {
         await Notifications.cancelScheduledNotificationAsync(notificationId);
       } catch (cancelError) {
-        console.error('Error cancelling reminder notification:', cancelError);
       }
     }
 
@@ -59,14 +56,12 @@ export const deleteReminder = async (
       try {
         await Calendar.deleteEventAsync(calendarEventId);
       } catch (calendarError) {
-        console.error('Error deleting calendar event:', calendarError);
       }
     }
     const reminders = await getReminders();
     const next = reminders.filter((reminder) => reminder.id !== id);
     await AsyncStorage.setItem(REMINDERS_KEY, JSON.stringify(next));
   } catch (error) {
-    console.error('Error deleting reminder:', error);
   }
 };
 
@@ -92,7 +87,7 @@ export const getTodayReminders = async (): Promise<Reminder[]> => {
   return reminders.filter((reminder) => new Date(reminder.dateTime).getTime() >= now);
 };
 
-export const getTodayRemindersSummary = async (): Promise<
+export const getTodayRemindersSummary = async (locale = 'fi-FI'): Promise<
   | { dateKey: string; message: string; count: number }
   | null
 > => {
@@ -104,7 +99,7 @@ export const getTodayRemindersSummary = async (): Promise<
 
   const message = reminders
     .map((reminder) => {
-      const time = new Date(reminder.dateTime).toLocaleTimeString('fi-FI', {
+      const time = new Date(reminder.dateTime).toLocaleTimeString(locale, {
         hour: '2-digit',
         minute: '2-digit',
       });
@@ -123,7 +118,6 @@ export const getLastReminderAlertDate = async (): Promise<string | null> => {
   try {
     return await AsyncStorage.getItem(TODAY_ALERT_KEY);
   } catch (error) {
-    console.error('Error getting last reminder alert date:', error);
     return null;
   }
 };
@@ -132,7 +126,6 @@ export const setLastReminderAlertDate = async (dateKey: string): Promise<void> =
   try {
     await AsyncStorage.setItem(TODAY_ALERT_KEY, dateKey);
   } catch (error) {
-    console.error('Error setting last reminder alert date:', error);
   }
 };
 
@@ -146,7 +139,6 @@ export const getShowTodayRemindersAlert = async (): Promise<boolean> => {
     }
     return value === 'true';
   } catch (error) {
-    console.error('Error getting show today reminders setting:', error);
     return true;
   }
 };
@@ -155,7 +147,6 @@ export const setShowTodayRemindersAlert = async (enabled: boolean): Promise<void
   try {
     await AsyncStorage.setItem(SHOW_TODAY_ALERT_KEY, enabled ? 'true' : 'false');
   } catch (error) {
-    console.error('Error setting show today reminders setting:', error);
   }
 };
 
@@ -164,7 +155,6 @@ export const getCalendarSyncEnabled = async (): Promise<boolean> => {
     const value = await AsyncStorage.getItem(CALENDAR_SYNC_KEY);
     return value === 'true';
   } catch (error) {
-    console.error('Error getting calendar sync setting:', error);
     return false;
   }
 };
@@ -173,7 +163,6 @@ export const setCalendarSyncEnabled = async (enabled: boolean): Promise<void> =>
   try {
     await AsyncStorage.setItem(CALENDAR_SYNC_KEY, enabled ? 'true' : 'false');
   } catch (error) {
-    console.error('Error setting calendar sync setting:', error);
   }
 };
 
@@ -181,7 +170,6 @@ export const getSelectedCalendarId = async (): Promise<string | null> => {
   try {
     return await AsyncStorage.getItem(CALENDAR_ID_KEY);
   } catch (error) {
-    console.error('Error getting selected calendar id:', error);
     return null;
   }
 };
@@ -190,7 +178,6 @@ export const setSelectedCalendarId = async (calendarId: string): Promise<void> =
   try {
     await AsyncStorage.setItem(CALENDAR_ID_KEY, calendarId);
   } catch (error) {
-    console.error('Error setting selected calendar id:', error);
   }
 };
 
@@ -218,7 +205,6 @@ export const createCalendarEvent = async (
 
     return eventId;
   } catch (error) {
-    console.error('Error creating calendar event:', error);
     return null;
   }
 };
@@ -252,7 +238,6 @@ export const scheduleReminderNotification = async (
 
     return notificationId;
   } catch (error) {
-    console.error('Error scheduling reminder notification:', error);
     return null;
   }
 };

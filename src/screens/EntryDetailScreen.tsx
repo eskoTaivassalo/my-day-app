@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -22,8 +22,19 @@ import * as FileSystem from 'expo-file-system/legacy';
 import ViewShot from 'react-native-view-shot';
 import { Video,ResizeMode } from 'expo-av';
 import { DiaryEntry } from '../types/DiaryEntry';
-import { updateEntry, deleteEntry, uploadImages, uploadVideos, resolveEntryMediaUris } from '../services/diaryService';
+import {
+  updateEntry,
+  deleteEntry,
+  uploadImages,
+  uploadVideos,
+  resolveEntryMediaUris,
+  getCachedVideoThumbnailUri,
+  ensureVideoThumbnailCached,
+} from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
 
 const { width } = Dimensions.get('window');
@@ -42,6 +53,10 @@ interface Props {
 export default function EntryDetailScreen({ navigation, route }: Props) {
   const { entry: serializedEntry } = route.params;
   const { user } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
   
   // Konvertoi Date-stringit takaisin Date-objekteiksi
   const normalizedEntry: DiaryEntry = {
@@ -69,9 +84,8 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [showLayoutSelector, setShowLayoutSelector] = useState(false);
   const [tempLayout, setTempLayout] = useState<LayoutType>(entry.layout || 'grid');
-  const [mediaResolving, setMediaResolving] = useState(false);
-  const [videoResolveError, setVideoResolveError] = useState<string | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+  const [runtimeVideoThumbnails, setRuntimeVideoThumbnails] = useState<Record<string, string>>({});
   const viewShotRef = useRef<ViewShot>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -80,35 +94,21 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
     const resolveMedia = async () => {
       try {
-        const hasEncryptedMedia =
-          (entry.images || []).some((uri) => /\.enc(\?|$)/.test(uri)) ||
-          (entry.videos || []).some((uri) => /\.enc(\?|$)/.test(uri));
+        const hasEncryptedImages = (entry.images || []).some((uri) => /\.enc(\?|$)/.test(uri));
 
-        if (!hasEncryptedMedia) {
+        if (!hasEncryptedImages) {
           return;
         }
 
-        setMediaResolving(true);
-        setVideoResolveError(null);
         const resolvedEntry = await resolveEntryMediaUris(entry);
         if (!isMounted) return;
-
-        const unresolvedVideos = (resolvedEntry.videos || []).filter((uri) => /\.enc(\?|$)/.test(uri));
-        if (unresolvedVideos.length > 0) {
-          setVideoResolveError('Videon purku epäonnistui. Kokeile avata merkintä uudelleen.');
-        }
 
         setEntry(resolvedEntry);
         if (!isEditing) {
           setEditedImages(resolvedEntry.images || []);
           setEditedVideos(resolvedEntry.videos || []);
         }
-      } catch (error) {
-        console.error('Error resolving entry media:', error);
-      } finally {
-        if (isMounted) {
-          setMediaResolving(false);
-        }
+      } catch {
       }
     };
 
@@ -119,8 +119,87 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     };
   }, [entry.id]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const resolveVideoThumbnails = async () => {
+      const currentVideos = entry.videos || [];
+      const originalVideos = normalizedEntry.videos || [];
+
+      const candidates = currentVideos
+        .map((currentVideoUri, index) => {
+          const originalVideoUri = originalVideos[index] || currentVideoUri;
+          return { currentVideoUri, originalVideoUri };
+        })
+        .filter(({ currentVideoUri }) => {
+          if (!currentVideoUri) {
+            return false;
+          }
+          if (entry.videoThumbnails?.[currentVideoUri]) {
+            return false;
+          }
+          return true;
+        });
+
+      if (candidates.length === 0) {
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        candidates.map(async ({ currentVideoUri, originalVideoUri }) => {
+          const cachedThumbnail = await getCachedVideoThumbnailUri(originalVideoUri);
+          const resolvedThumbnail = cachedThumbnail || await ensureVideoThumbnailCached(originalVideoUri);
+
+          if (!resolvedThumbnail) {
+            return null;
+          }
+
+          return {
+            currentVideoUri,
+            originalVideoUri,
+            resolvedThumbnail,
+          };
+        })
+      );
+
+      if (!isMounted) {
+        return;
+      }
+
+      setRuntimeVideoThumbnails((prev) => {
+        let changed = false;
+        const next = { ...prev };
+
+        results.forEach((result) => {
+          if (result.status !== 'fulfilled' || !result.value) {
+            return;
+          }
+
+          const { currentVideoUri, originalVideoUri, resolvedThumbnail } = result.value;
+
+          if (next[currentVideoUri] !== resolvedThumbnail) {
+            next[currentVideoUri] = resolvedThumbnail;
+            changed = true;
+          }
+          if (next[originalVideoUri] !== resolvedThumbnail) {
+            next[originalVideoUri] = resolvedThumbnail;
+            changed = true;
+          }
+        });
+
+        return changed ? next : prev;
+      });
+    };
+
+    void resolveVideoThumbnails();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [entry.id, entry.videos, entry.videoThumbnails, normalizedEntry.videos]);
+
   const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('fi-FI', {
+    return new Date(date).toLocaleDateString(locale, {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -129,7 +208,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const formatTime = (date: Date) => {
-    return new Date(date).toLocaleTimeString('fi-FI', {
+    return new Date(date).toLocaleTimeString(locale, {
       hour: '2-digit',
       minute: '2-digit',
     });
@@ -140,7 +219,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Lupa tarvitaan', 'Sijainnin käyttöoikeus tarvitaan paikan lisäämiseen.');
+        Alert.alert(t('common_permission_required'), t('entry_location_permission'));
         return;
       }
 
@@ -154,14 +233,13 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           : undefined;
         
         setEditedLocation({ latitude, longitude, address });
-        Alert.alert('Sijainti lisätty', address || 'Sijainti tallennettu');
+        Alert.alert(t('common_location_added'), address || t('common_location_saved'));
       } catch {
         setEditedLocation({ latitude, longitude });
-        Alert.alert('Sijainti lisätty', 'Sijainti tallennettu');
+        Alert.alert(t('common_location_added'), t('common_location_saved'));
       }
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Virhe', 'Sijainnin hakeminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('entry_location_failed'));
     } finally {
       setLoadingLocation(false);
     }
@@ -169,7 +247,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const handleSave = async () => {
     if (!editedTitle.trim() || !editedContent.trim()) {
-      Alert.alert('Virhe', 'Otsikko ja sisältö eivät voi olla tyhjiä');
+      Alert.alert(t('common_error'), t('entry_error_empty'));
       return;
     }
 
@@ -199,10 +277,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       });
       
       setIsEditing(false);
-      Alert.alert('Tallennettu', 'Muutokset on tallennettu');
-    } catch (error) {
-      console.error('Error saving entry:', error);
-      Alert.alert('Virhe', 'Tallentaminen epäonnistui');
+      Alert.alert(t('entry_saved'), t('entry_changes_saved'));
+    } catch {
+      Alert.alert(t('common_error'), t('entry_save_failed'));
     } finally {
       setSaving(false);
     }
@@ -221,21 +298,21 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const handleDelete = () => {
     Alert.alert(
-      'Poista merkintä',
-      'Haluatko varmasti poistaa tämän merkinnän?',
+      t('entry_delete_title'),
+      t('entry_delete_confirm'),
       [
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('common_cancel'), style: 'cancel' },
         {
-          text: 'Poista',
+          text: t('common_delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteEntry(entry.id);
-              Alert.alert('Poistettu', 'Merkintä poistettu', [
-                { text: 'OK', onPress: () => navigation.goBack() }
+              Alert.alert(t('common_deleted'), t('entry_deleted'), [
+                { text: t('common_ok'), onPress: () => navigation.goBack() }
               ]);
             } catch (error) {
-              Alert.alert('Virhe', 'Poistaminen epäonnistui');
+              Alert.alert(t('common_error'), t('entry_delete_failed'));
             }
           },
         },
@@ -246,12 +323,12 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   const handleShare = async () => {
     try {
       if (!viewShotRef.current) {
-        Alert.alert('Virhe', 'Kuvakaappauksen ottaminen epäonnistui');
+        Alert.alert(t('common_error'), t('entry_screenshot_failed'));
         return;
       }
 
       if (!viewShotRef.current?.capture) {
-        Alert.alert('Virhe', 'Kuvakaappauksen ottaminen epäonnistui');
+        Alert.alert(t('common_error'), t('entry_screenshot_failed'));
         return;
       }
 
@@ -277,11 +354,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           setEntry(updatedEntry);
         }
       } else {
-        Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
+        Alert.alert(t('common_error'), t('entry_share_no_support'));
       }
-    } catch (error) {
-      console.error('Jakaminen epäonnistui:', error);
-      Alert.alert('Virhe', 'Merkinnän jakaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('entry_share_failed'));
     }
   };
 
@@ -297,9 +373,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       try {
         const newImageUris = result.assets.map((asset) => asset.uri);
         const uploadedUrls = await uploadImages(newImageUris, user.uid);
-        setEditedImages([...editedImages, ...uploadedUrls]);
+        setEditedImages((prev) => [...prev, ...uploadedUrls]);
       } catch (error) {
-        Alert.alert('Virhe', 'Kuvien lataus epäonnistui');
+        Alert.alert(t('common_error'), t('entry_images_failed'));
       } finally {
         setSaving(false);
       }
@@ -307,13 +383,14 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const removeImage = (uri: string) => {
-    setEditedImages(editedImages.filter((img) => img !== uri));
+    setEditedImages((prev) => prev.filter((img) => img !== uri));
   };
 
   const pickVideo = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Videos,
       allowsMultipleSelection: true,
+      selectionLimit: 0,
       quality: 1,
     });
 
@@ -332,10 +409,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           }
           return acc;
         }, {} as Record<string, string>);
-        setEditedVideos([...editedVideos, ...uploadedUrls]);
+        setEditedVideos((prev) => [...prev, ...uploadedUrls]);
         setEditedVideoThumbnails((prev) => ({ ...prev, ...thumbnailUpdates }));
       } catch (error) {
-        Alert.alert('Virhe', 'Videoiden lataus epäonnistui');
+        Alert.alert(t('common_error'), t('entry_videos_failed'));
       } finally {
         setSaving(false);
         setUploadProgress(null);
@@ -347,7 +424,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
-      Alert.alert('Lupa tarvitaan', 'Kameran käyttöoikeus tarvitaan videon tallentamiseen.');
+      Alert.alert(t('common_permission_required'), t('entry_camera_permission'));
       return;
     }
 
@@ -371,10 +448,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           }
           return acc;
         }, {} as Record<string, string>);
-        setEditedVideos([...editedVideos, ...uploadedUrls]);
+        setEditedVideos((prev) => [...prev, ...uploadedUrls]);
         setEditedVideoThumbnails((prev) => ({ ...prev, ...thumbnailUpdates }));
       } catch (error) {
-        Alert.alert('Virhe', 'Videon lataus epäonnistui');
+        Alert.alert(t('common_error'), t('entry_video_upload_failed'));
       } finally {
         setSaving(false);
         setUploadProgress(null);
@@ -383,7 +460,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const removeVideo = (uri: string) => {
-    setEditedVideos(editedVideos.filter((video) => video !== uri));
+    setEditedVideos((prev) => prev.filter((video) => video !== uri));
   };
   const handleImagePress = (uri: string) => {
     if (!isEditing) {
@@ -397,7 +474,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     try {
       const isAvailable = await Sharing.isAvailableAsync();
       if (!isAvailable) {
-        Alert.alert('Virhe', 'Jakaminen ei ole tuettu tällä laitteella');
+        Alert.alert(t('common_error'), t('entry_share_no_support'));
         return;
       }
 
@@ -419,11 +496,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           setEntry(updatedEntry);
         }
       } else {
-        Alert.alert('Virhe', 'Kuvan lataaminen epäonnistui');
+        Alert.alert(t('common_error'), t('entry_image_upload_failed'));
       }
-    } catch (error) {
-      console.error('Jakaminen epäonnistui:', error);
-      Alert.alert('Virhe', 'Jakaminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('entry_share_failed'));
     }
   };
   const renderImages = () => {
@@ -672,24 +748,15 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
 
   const renderVideos = () => {
     const videos = isEditing ? editedVideos : (entry.videos || []);
-    const playableVideos = videos.filter((uri) => !/\.enc(\?|$)/.test(uri));
+    const videoThumbnailMap = isEditing
+      ? { ...runtimeVideoThumbnails, ...editedVideoThumbnails }
+      : { ...runtimeVideoThumbnails, ...(entry.videoThumbnails || {}) };
 
     if (videos.length === 0) return null;
 
     return (
       <View style={styles.videoSection}>
-        {mediaResolving && (
-          <View style={styles.videoResolvingContainer}>
-            <ActivityIndicator size="small" color={colors.primary} />
-            <Text style={styles.videoResolvingText}>Puretaan salattuja videoita...</Text>
-          </View>
-        )}
-
-        {!!videoResolveError && !mediaResolving && (
-          <Text style={styles.videoErrorText}>{videoResolveError}</Text>
-        )}
-
-        {playableVideos.map((uri, index) => (
+        {videos.map((uri, index) => (
           <TouchableOpacity
             key={index}
             style={styles.videoWrapper}
@@ -702,15 +769,21 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
             }}
             disabled={isEditing}
           >
-            <Video
-              source={{ uri }}
-              style={styles.videoPlayer}
-              resizeMode={ResizeMode.COVER}
-              useNativeControls
-            />
+            {videoThumbnailMap?.[uri] ? (
+              <Image
+                source={{ uri: videoThumbnailMap[uri] }}
+                style={styles.videoPlayer}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.videoPreviewPlaceholder}>
+                <Text style={styles.videoPreviewPlaceholderIcon}>🎥</Text>
+                <Text style={styles.videoPreviewPlaceholderText}>{t('timeline_video_badge')} {index + 1}</Text>
+              </View>
+            )}
             {!isEditing && (
               <View style={styles.videoOpenOverlay}>
-                <Text style={styles.videoOpenText}>▶ Avaa video</Text>
+                <Text style={styles.videoOpenText}>{t('entry_open_video')}</Text>
               </View>
             )}
             {isEditing && (
@@ -728,21 +801,21 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.colors.background, borderBottomColor: theme.colors.border }]}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>← Takaisin</Text>
+          <Text style={[styles.backButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_back')}</Text>
         </TouchableOpacity>
         
         <View style={styles.headerButtons}>
           {!isEditing ? (
             <>
-              <TouchableOpacity style={styles.iconButton} onPress={handleShare}>
+              <TouchableOpacity style={[styles.iconButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50 }]} onPress={handleShare}>
                 <Text style={styles.iconButtonText}>📤</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.iconButton} 
+                style={[styles.iconButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50 }]} 
                 onPress={() => {
                   setTempLayout(layout);
                   setShowLayoutSelector(true);
@@ -750,10 +823,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
               >
                 <Text style={styles.iconButtonText}>🎨</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.iconButton} onPress={() => setIsEditing(true)}>
+              <TouchableOpacity style={[styles.iconButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50 }]} onPress={() => setIsEditing(true)}>
                 <Text style={styles.iconButtonText}>✏️</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.iconButton} onPress={handleDelete}>
+              <TouchableOpacity style={[styles.iconButton, { backgroundColor: isDark ? '#1E293B' : colors.gray50 }]} onPress={handleDelete}>
                 <Text style={styles.iconButtonText}>🗑️</Text>
               </TouchableOpacity>
             </>
@@ -764,15 +837,15 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={handleCancel}
                 disabled={saving}
               >
-                <Text style={styles.cancelButtonText}>Peruuta</Text>
+                <Text style={[styles.cancelButtonText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.saveButton}
+                style={[styles.saveButton, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }]}
                 onPress={handleSave}
                 disabled={saving}
               >
-                <Text style={styles.saveButtonText}>
-                  {saving ? 'Tallennetaan...' : 'Tallenna'}
+                <Text style={[styles.saveButtonText, { fontFamily: theme.fonts.bodyFamily }]}>
+                  {saving ? t('common_saving') : t('common_save')}
                 </Text>
               </TouchableOpacity>
             </>
@@ -792,9 +865,8 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
             />
           </View>
           <Text style={styles.progressText}>
-            {uploadProgress < 45 && 'Salataan videota...'}
-            {uploadProgress >= 45 && uploadProgress < 99 && 'Lähetetään...'}
-            {uploadProgress === 100 && 'Valmis!'}
+            {uploadProgress < 99 && t('entry_uploading')}
+            {uploadProgress === 100 && t('entry_upload_ready')}
             {' '}{uploadProgress}%
           </Text>
         </View>
@@ -803,7 +875,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       {/* Content */}
       <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.9 }} style={{ flex: 1 }}>
         <ScrollView 
-          style={styles.scrollContent} 
+          style={[styles.scrollContent, { backgroundColor: theme.colors.background }]} 
           contentContainerStyle={styles.contentContainer}
           showsVerticalScrollIndicator={false}
         >
@@ -813,9 +885,9 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
             onPress={() => isEditing && setShowDatePicker(true)}
             disabled={!isEditing}
           >
-            <Text style={styles.dateText}>{formatDate(isEditing ? editedDate : entry.date)}</Text>
-            <Text style={styles.timeText}>
-              {isEditing ? 'Napauta vaihtaaksesi päivää 📅' : formatTime(entry.date)}
+            <Text style={[styles.dateText, { color: theme.colors.text }]}>{formatDate(isEditing ? editedDate : entry.date)}</Text>
+            <Text style={[styles.timeText, { color: theme.colors.textSecondary }]}>
+              {isEditing ? t('entry_tap_to_change_date') : formatTime(entry.date)}
             </Text>
           </TouchableOpacity>
 
@@ -841,11 +913,11 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 style={styles.titleInput}
                 value={editedTitle}
                 onChangeText={setEditedTitle}
-                placeholder="Otsikko"
+                placeholder={t('entry_title_placeholder')}
                 multiline
               />
             ) : (
-              <Text style={styles.title}>{entry.title}</Text>
+              <Text style={[styles.title, { color: theme.colors.text }]}>{entry.title}</Text>
             )
           )}
 
@@ -856,21 +928,21 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 style={styles.contentInput}
                 value={editedContent}
                 onChangeText={setEditedContent}
-                placeholder="Sisältö"
+                placeholder={t('entry_content_placeholder')}
                 multiline
                 textAlignVertical="top"
               />
             ) : (
-              <Text style={styles.content}>{entry.content}</Text>
+              <Text style={[styles.content, { color: theme.colors.text }]}>{entry.content}</Text>
             )
           )}
 
           {/* Location */}
           {isEditing ? (
             editedLocation ? (
-              <View style={styles.locationSection}>
+              <View style={[styles.locationSection, { backgroundColor: theme.colors.backgroundLight }]}>
                 <Text style={styles.locationIcon}>📍</Text>
-                <Text style={styles.locationText}>
+                <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>
                   {editedLocation.address || `${editedLocation.latitude.toFixed(4)}, ${editedLocation.longitude.toFixed(4)}`}
                 </Text>
                 <TouchableOpacity onPress={() => setEditedLocation(null)}>
@@ -885,15 +957,15 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
               >
                 <Text style={styles.addLocationIcon}>📍</Text>
                 <Text style={styles.addLocationText}>
-                  {loadingLocation ? 'Haetaan sijaintia...' : 'Lisää sijainti'}
+                  {loadingLocation ? t('entry_location_loading') : t('entry_add_location')}
                 </Text>
               </TouchableOpacity>
             )
           ) : (
             entry.location && (
-              <View style={styles.locationSection}>
+              <View style={[styles.locationSection, { backgroundColor: theme.colors.backgroundLight }]}>
                 <Text style={styles.locationIcon}>📍</Text>
-                <Text style={styles.locationText}>
+                <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>
                   {entry.location.address || `${entry.location.latitude.toFixed(4)}, ${entry.location.longitude.toFixed(4)}`}
                 </Text>
               </View>
@@ -910,13 +982,13 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
           {isEditing && (
             <View style={styles.mediaButtonsRow}>
               <TouchableOpacity style={styles.addImageButton} onPress={pickImage}>
-                <Text style={styles.addImageText}>+ Lisää kuvia</Text>
+                <Text style={styles.addImageText}>{t('entry_add_images')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.addVideoButton} onPress={pickVideo}>
-                <Text style={styles.addVideoText}>+ Lisää videoita</Text>
+                <Text style={styles.addVideoText}>{t('entry_add_videos')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.addVideoButton} onPress={recordVideo}>
-                <Text style={styles.addVideoText}>🎥 Kuvaa video</Text>
+                <Text style={styles.addVideoText}>{t('entry_record_video')}</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -924,10 +996,10 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         {/* Metadata */}
         <View style={styles.metadata}>
           <Text style={styles.metadataText}>
-            Luotu: {formatDate(entry.createdAt)} {formatTime(entry.createdAt)}
+            {t('entry_created_at')} {formatDate(entry.createdAt)} {formatTime(entry.createdAt)}
           </Text>
           <Text style={styles.metadataText}>
-            Muokattu: {formatDate(entry.updatedAt)} {formatTime(entry.updatedAt)}
+            {t('entry_updated_at')} {formatDate(entry.updatedAt)} {formatTime(entry.updatedAt)}
           </Text>
         </View>
       </ScrollView>
@@ -960,14 +1032,14 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                   style={styles.toolbarButton}
                   onPress={handleShareImage}
                 >
-                  <Text style={styles.toolbarButtonText}>📤 Jaa</Text>
+                  <Text style={styles.toolbarButtonText}>{t('entry_share')}</Text>
                 </TouchableOpacity>
                 
                 <TouchableOpacity 
                   style={[styles.toolbarButton, styles.closeButton]}
                   onPress={() => setSelectedImage(null)}
                 >
-                  <Text style={styles.toolbarButtonText}>✕ Sulje</Text>
+                  <Text style={styles.toolbarButtonText}>{t('common_close')}</Text>
                 </TouchableOpacity>
               </View>
             </>
@@ -996,9 +1068,8 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 resizeMode={ResizeMode.CONTAIN}
                 useNativeControls
                 shouldPlay
-                onError={(error) => {
-                  console.error('Video playback error:', error);
-                  setVideoPlaybackError('Videon toisto epäonnistui tällä tiedostolla.');
+                onError={() => {
+                  setVideoPlaybackError(t('entry_video_play_failed'));
                 }}
               />
 
@@ -1011,7 +1082,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                   style={[styles.toolbarButton, styles.closeButton]}
                   onPress={() => setSelectedVideo(null)}
                 >
-                  <Text style={styles.toolbarButtonText}>✕ Sulje</Text>
+                  <Text style={styles.toolbarButtonText}>{t('common_close')}</Text>
                 </TouchableOpacity>
               </View>
             </>
@@ -1028,7 +1099,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       >
         <View style={styles.layoutModalContainer}>
           <View style={styles.layoutModalContent}>
-            <Text style={styles.layoutModalTitle}>Valitse asettelu</Text>
+            <Text style={styles.layoutModalTitle}>{t('layout_select_title')}</Text>
             
             <View style={styles.layoutOptionsContainer}>
               <TouchableOpacity
@@ -1036,7 +1107,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('grid')}
               >
                 <Text style={styles.layoutOptionIcon}>⊞</Text>
-                <Text style={styles.layoutOptionText}>Ruudukko</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_grid')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1044,7 +1115,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('masonry')}
               >
                 <Text style={styles.layoutOptionIcon}>⊟</Text>
-                <Text style={styles.layoutOptionText}>Masonry</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_masonry')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1052,7 +1123,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('magazine')}
               >
                 <Text style={styles.layoutOptionIcon}>🗞️</Text>
-                <Text style={styles.layoutOptionText}>Lehti</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_magazine')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1060,7 +1131,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('full')}
               >
                 <Text style={styles.layoutOptionIcon}>▭</Text>
-                <Text style={styles.layoutOptionText}>Täysi</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_full')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1068,7 +1139,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('framed')}
               >
                 <Text style={styles.layoutOptionIcon}>🖼️</Text>
-                <Text style={styles.layoutOptionText}>Kehykset</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_framed')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1076,7 +1147,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => setTempLayout('overlay')}
               >
                 <Text style={styles.layoutOptionIcon}>🎭</Text>
-                <Text style={styles.layoutOptionText}>Overlay</Text>
+                <Text style={styles.layoutOptionText}>{t('layout_overlay')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -1085,7 +1156,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 style={styles.layoutModalCancelButton}
                 onPress={() => setShowLayoutSelector(false)}
               >
-                <Text style={styles.layoutModalCancelText}>Peruuta</Text>
+                <Text style={styles.layoutModalCancelText}>{t('common_cancel')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1098,13 +1169,12 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                   try {
                     await updateEntry(entry.id, { layout: tempLayout });
                     setEntry({ ...entry, layout: tempLayout });
-                  } catch (error) {
-                    console.error('Error saving layout:', error);
-                    Alert.alert('Virhe', 'Asettelun tallentaminen epäonnistui');
+                  } catch {
+                    Alert.alert(t('common_error'), t('entry_layout_save_failed'));
                   }
                 }}
               >
-                <Text style={styles.layoutModalApplyText}>Käytä tätä asettelua</Text>
+                <Text style={styles.layoutModalApplyText}>{t('layout_use')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1257,15 +1327,16 @@ const styles = StyleSheet.create({
   gridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
     marginBottom: spacing.lg,
   },
   gridImageWrapper: {
     position: 'relative',
-    width: (width - spacing.lg * 2 - spacing.sm) / 2,
+    width: '48.5%',
     height: 200,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
+    marginBottom: spacing.sm,
   },
   gridImage: {
     width: '100%',
@@ -1551,6 +1622,23 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  videoPreviewPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.gray900,
+    paddingHorizontal: spacing.lg,
+  },
+  videoPreviewPlaceholderIcon: {
+    fontSize: 42,
+    marginBottom: spacing.sm,
+  },
+  videoPreviewPlaceholderText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
   },
   content: {
     fontSize: typography.fontSizes.lg,

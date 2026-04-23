@@ -12,6 +12,8 @@ import {
   ScrollView,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 /**
  * EncryptionPassphraseScreen
@@ -24,6 +26,99 @@ import { useAuth } from '../contexts/AuthContext';
  */
 export default function EncryptionPassphraseScreen() {
   const { encryptionStatus, setupEncryption, unlockWithPassphrase, logout } = useAuth();
+  const { language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+
+  const strings = language === 'en'
+    ? {
+        error: 'Error',
+        enterPassphrase: 'Enter passphrase',
+        tooShortTitle: 'Too short',
+        tooShortBody: 'Passphrase must be at least 8 characters.',
+        mismatch: 'Passphrases do not match.',
+        wrongPassphraseTitle: 'Wrong passphrase',
+        wrongPassphraseBody: 'Passphrase was incorrect. Check spelling and try again.',
+        unknownError: 'Unknown error',
+        setupTitle: 'Set diary passphrase',
+        unlockTitle: 'Unlock diary',
+        setupDescription:
+          'Choose a passphrase to encrypt your diary content.\n\n' +
+          'This passphrase is required if you switch devices or reinstall the app. ' +
+          'Without it, encrypted data is lost - store it safely.',
+        unlockDescription:
+          'You are signed in on a new device or the app was reinstalled.\n\n' +
+          'Enter your previously set passphrase to unlock your diary.',
+        warning:
+          'Save your passphrase in a password manager. If you forget it, your diary content cannot be recovered.',
+        passphrasePlaceholderSetup: 'Passphrase (min. 8 characters)',
+        passphrasePlaceholderUnlock: 'Passphrase',
+        confirmPlaceholder: 'Confirm passphrase',
+        setupButton: 'Set passphrase',
+        unlockButton: 'Unlock diary',
+        logout: 'Sign out',
+        info:
+          '🔐 Your passphrase never leaves your device to the server. It is used to derive the encryption key protecting your diary.',
+      }
+    : language === 'sv'
+    ? {
+        error: 'Fel',
+        enterPassphrase: 'Ange losenfras',
+        tooShortTitle: 'For kort',
+        tooShortBody: 'Losenfrasen maste vara minst 8 tecken.',
+        mismatch: 'Losenfraserna matchar inte.',
+        wrongPassphraseTitle: 'Fel losenfras',
+        wrongPassphraseBody: 'Losenfrasen var fel. Kontrollera stavningen och forsok igen.',
+        unknownError: 'Okant fel',
+        setupTitle: 'Stall in dagbokens losenfras',
+        unlockTitle: 'Las upp dagboken',
+        setupDescription:
+          'Valj en losenfras som krypterar dagbokens innehall.\n\n' +
+          'Den behovs om du byter enhet eller installerar appen igen. ' +
+          'Utan den gar krypterad data forlorad - spara den sakert.',
+        unlockDescription:
+          'Du ar inloggad pa en ny enhet eller appen har installerats om.\n\n' +
+          'Ange din tidigare losenfras for att lasa upp dagboken.',
+        warning:
+          'Spara losenfrasen till exempel i en losenordshanterare. Om du glommer den kan innehallet inte aterstallas.',
+        passphrasePlaceholderSetup: 'Losenfras (minst 8 tecken)',
+        passphrasePlaceholderUnlock: 'Losenfras',
+        confirmPlaceholder: 'Bekrafta losenfras',
+        setupButton: 'Stall in losenfras',
+        unlockButton: 'Las upp dagboken',
+        logout: 'Logga ut',
+        info:
+          '🔐 Losenfrasen lamnar aldrig din enhet till servern. Den anvands for att skapa krypteringsnyckeln som skyddar din dagbok.',
+      }
+    : {
+        error: 'Virhe',
+        enterPassphrase: 'Syota salafraasi',
+        tooShortTitle: 'Liian lyhyt',
+        tooShortBody: 'Salafraasin tulee olla vahintaan 8 merkkia.',
+        mismatch: 'Salafraasit eivat tasmää.',
+        wrongPassphraseTitle: 'Väärä salafraasi',
+        wrongPassphraseBody: 'Salafraasi oli väärä. Tarkista kirjoitusasu ja yrita uudelleen.',
+        unknownError: 'Tuntematon virhe',
+        setupTitle: 'Aseta paivakirjan salafraasi',
+        unlockTitle: 'Avaa paivakirja',
+        setupDescription:
+          'Valitse salafraasi jolla paivakirjasi sisalto salataan.\n\n' +
+          'Tama salafraasi tarvitaan jos vaihdat laitetta tai asennat sovelluksen uudelleen. ' +
+          'Ilman sita salattu data on menetetty - tallenna se turvalliseen paikkaan.',
+        unlockDescription:
+          'Olet kirjautunut uudella laitteella tai sovellus on asennettu uudelleen.\n\n' +
+          'Syota aiemmin asettamasi salafraasi avataksesi paivakirjasi.',
+        warning:
+          'Tallenna salafraasi esim. salasananhallintaohjelmaan. Jos unohdat sen, paivakirjasi sisaltoa ei voi palauttaa.',
+        passphrasePlaceholderSetup: 'Salafraasi (min. 8 merkkia)',
+        passphrasePlaceholderUnlock: 'Salafraasi',
+        confirmPlaceholder: 'Vahvista salafraasi',
+        setupButton: 'Aseta salafraasi',
+        unlockButton: 'Avaa paivakirja',
+        logout: 'Kirjaudu ulos',
+        info:
+          '🔐 Salafraasi ei koskaan lahde laitteeltasi palvelimelle. Sen avulla johdetaan salausavain paivakirjasi suojaamiseksi.',
+      };
 
   const isSetup = encryptionStatus === 'needs_setup';
 
@@ -33,17 +128,17 @@ export default function EncryptionPassphraseScreen() {
 
   const handleSubmit = async () => {
     if (!passphrase.trim()) {
-      Alert.alert('Virhe', 'Syötä salafraasi');
+      Alert.alert(strings.error, strings.enterPassphrase);
       return;
     }
 
     if (isSetup) {
       if (passphrase.length < 8) {
-        Alert.alert('Liian lyhyt', 'Salafraasin tulee olla vähintään 8 merkkiä.');
+        Alert.alert(strings.tooShortTitle, strings.tooShortBody);
         return;
       }
       if (passphrase !== confirm) {
-        Alert.alert('Virhe', 'Salafraasit eivät täsmää.');
+        Alert.alert(strings.error, strings.mismatch);
         return;
       }
     }
@@ -56,13 +151,13 @@ export default function EncryptionPassphraseScreen() {
         const ok = await unlockWithPassphrase(passphrase);
         if (!ok) {
           Alert.alert(
-            'Väärä salafraasi',
-            'Salafraasi oli väärä. Tarkista kirjoitusasu ja yritä uudelleen.'
+            strings.wrongPassphraseTitle,
+            strings.wrongPassphraseBody,
           );
         }
       }
     } catch (error: any) {
-      Alert.alert('Virhe', error.message ?? 'Tuntematon virhe');
+      Alert.alert(strings.error, error.message ?? strings.unknownError);
     } finally {
       setLoading(false);
     }
@@ -70,7 +165,7 @@ export default function EncryptionPassphraseScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
@@ -78,36 +173,38 @@ export default function EncryptionPassphraseScreen() {
         <Text style={styles.icon}>{isSetup ? '🔑' : '🔒'}</Text>
 
         {/* Otsikko */}
-        <Text style={styles.title}>
-          {isSetup ? 'Aseta päiväkirjan salafraasi' : 'Avaa päiväkirja'}
+        <Text style={[styles.title, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }] }>
+          {isSetup ? strings.setupTitle : strings.unlockTitle}
         </Text>
 
         {/* Selitys */}
-        <Text style={styles.description}>
-          {isSetup
-            ? 'Valitse salafraasi jolla päiväkirjasi sisältö salataan.\n\n' +
-              'Tämä salafraasi tarvitaan jos vaihdat laitetta tai asennat sovelluksen uudelleen. ' +
-              'Ilman sitä salattu data on menetetty — tallenna se turvalliseen paikkaan.'
-            : 'Olet kirjautunut uudella laitteella tai sovellus on asennettu uudelleen.\n\n' +
-              'Syötä aiemmin asettamasi salafraasi avataksesi päiväkirjasi.'}
+        <Text style={[styles.description, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }] }>
+          {isSetup ? strings.setupDescription : strings.unlockDescription}
         </Text>
 
         {/* Varoituslaatikko */}
         {isSetup && (
-          <View style={styles.warning}>
+          <View style={[styles.warning, { backgroundColor: isDark ? '#1E293B' : '#FEF3C7', borderLeftColor: theme.colors.accent }] }>
             <Text style={styles.warningIcon}>⚠️</Text>
-            <Text style={styles.warningText}>
-              Tallenna salafraasi esim. salasananhallintaohjelmaan.
-              Jos unohdat sen, päiväkirjasi sisältöä ei voi palauttaa.
+            <Text style={[styles.warningText, { color: isDark ? '#FDE68A' : '#92400E', fontFamily: theme.fonts.bodyFamily }] }>
+              {strings.warning}
             </Text>
           </View>
         )}
 
         {/* Lomake */}
         <TextInput
-          style={styles.input}
-          placeholder={isSetup ? 'Salafraasi (min. 8 merkkiä)' : 'Salafraasi'}
-          placeholderTextColor="#999"
+          style={[
+            styles.input,
+            {
+              backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+              borderColor: theme.colors.border,
+              color: theme.colors.text,
+              fontFamily: theme.fonts.bodyFamily,
+            },
+          ]}
+          placeholder={isSetup ? strings.passphrasePlaceholderSetup : strings.passphrasePlaceholderUnlock}
+          placeholderTextColor={theme.colors.textSecondary}
           value={passphrase}
           onChangeText={setPassphrase}
           secureTextEntry
@@ -117,9 +214,17 @@ export default function EncryptionPassphraseScreen() {
 
         {isSetup && (
           <TextInput
-            style={styles.input}
-            placeholder="Vahvista salafraasi"
-            placeholderTextColor="#999"
+            style={[
+              styles.input,
+              {
+                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={strings.confirmPlaceholder}
+            placeholderTextColor={theme.colors.textSecondary}
             value={confirm}
             onChangeText={setConfirm}
             secureTextEntry
@@ -128,28 +233,27 @@ export default function EncryptionPassphraseScreen() {
         )}
 
         <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
+          style={[styles.button, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }, loading && styles.buttonDisabled]}
           onPress={handleSubmit}
           disabled={loading}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>
-              {isSetup ? 'Aseta salafraasi' : 'Avaa päiväkirja'}
+            <Text style={[styles.buttonText, { fontFamily: theme.fonts.bodyFamily }] }>
+              {isSetup ? strings.setupButton : strings.unlockButton}
             </Text>
           )}
         </TouchableOpacity>
 
         {/* Kirjaudu ulos -linkki */}
         <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-          <Text style={styles.logoutText}>Kirjaudu ulos</Text>
+          <Text style={[styles.logoutText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{strings.logout}</Text>
         </TouchableOpacity>
 
         {/* Info */}
-        <Text style={styles.infoText}>
-          🔐 Salafraasi ei koskaan lähde laitteeltasi palvelimelle.
-          Sen avulla johdetaan salausavain päiväkirjasi suojaamiseksi.
+        <Text style={[styles.infoText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+          {strings.info}
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

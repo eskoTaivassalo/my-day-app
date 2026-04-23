@@ -10,6 +10,18 @@ const getStorageKey = (userId: string): string => {
   return `${ACHIEVEMENT_KEY_PREFIX}${userId}`;
 };
 
+const normalizeAchievementIds = (raw: unknown): number[] => {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const normalized = raw
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+
+  return Array.from(new Set(normalized));
+};
+
 /**
  * Save unlocked achievement IDs for a user
  */
@@ -19,9 +31,9 @@ export const saveUnlockedAchievements = async (
 ): Promise<void> => {
   try {
     const key = getStorageKey(userId);
-    await AsyncStorage.setItem(key, JSON.stringify(achievementIds));
+    const normalized = normalizeAchievementIds(achievementIds);
+    await AsyncStorage.setItem(key, JSON.stringify(normalized));
   } catch (error) {
-    console.error('Error saving unlocked achievements:', error);
   }
 };
 
@@ -33,12 +45,11 @@ export const getUnlockedAchievementIds = async (userId: string): Promise<number[
     const key = getStorageKey(userId);
     const data = await AsyncStorage.getItem(key);
     if (data) {
-      const ids = JSON.parse(data);
+      const ids = normalizeAchievementIds(JSON.parse(data));
       return ids;
     }
     return [];
   } catch (error) {
-    console.error('Error loading unlocked achievements:', error);
     return [];
   }
 };
@@ -57,7 +68,6 @@ export const addUnlockedAchievement = async (
       await saveUnlockedAchievements(userId, currentIds);
     }
   } catch (error) {
-    console.error('Error adding unlocked achievement:', error);
   }
 };
 
@@ -69,6 +79,5 @@ export const clearUnlockedAchievements = async (userId: string): Promise<void> =
     const key = getStorageKey(userId);
     await AsyncStorage.removeItem(key);
   } catch (error) {
-    console.error('Error clearing unlocked achievements:', error);
   }
 };

@@ -1,56 +1,53 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   ScrollView,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
-import { getEntries } from '../services/diaryService';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { getUnlockedAchievementIds } from '../services/achievementStorageService';
 import {
   achievements,
-  calculateStats,
-  getUnlockedAchievements,
+  getLocalizedAchievement,
   Achievement,
 } from '../utils/achievementUtils';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 export default function AchievementsScreen({ navigation }: any) {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
   const [unlockedIds, setUnlockedIds] = useState<number[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (user) {
-      loadAchievements();
-    }
-  }, [user]);
-
-  const loadAchievements = async () => {
+  const loadAchievements = useCallback(async () => {
     if (!user) return;
 
     try {
-      setLoading(true);
       const ids = await getUnlockedAchievementIds(user.uid);
       setUnlockedIds(ids);
-    } catch (error) {
-      console.error('Error loading achievements:', error);
-    } finally {
-      setLoading(false);
+    } catch {
+      setUnlockedIds([]);
     }
-  };
+  }, [user]);
 
-  const renderAchievement = ({ item }: { item: Achievement }) => {
+  useEffect(() => {
+    void loadAchievements();
+  }, [loadAchievements]);
+
+  const renderAchievement = useCallback(({ item }: { item: Achievement }) => {
     const isUnlocked = unlockedIds.includes(item.id);
 
     return (
       <View
         style={[
           styles.achievementItem,
-          !isUnlocked && styles.achievementItemLocked,
+          { backgroundColor: isDark ? '#111827' : colors.white },
+          !isUnlocked && [styles.achievementItemLocked, { backgroundColor: isDark ? '#1E293B' : colors.gray100 }],
         ]}
       >
         <View style={styles.achievementIconContainer}>
@@ -67,7 +64,8 @@ export default function AchievementsScreen({ navigation }: any) {
           <Text
             style={[
               styles.achievementName,
-              !isUnlocked && styles.achievementNameLocked,
+              { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily },
+              !isUnlocked && [styles.achievementNameLocked, { color: theme.colors.textSecondary }],
             ]}
           >
             {item.name}
@@ -75,7 +73,8 @@ export default function AchievementsScreen({ navigation }: any) {
           <Text
             style={[
               styles.achievementDescription,
-              !isUnlocked && styles.achievementDescriptionLocked,
+              { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily },
+              !isUnlocked && [styles.achievementDescriptionLocked, { color: theme.colors.textSecondary }],
             ]}
           >
             {item.description}
@@ -88,86 +87,106 @@ export default function AchievementsScreen({ navigation }: any) {
         )}
       </View>
     );
-  };
+  }, [unlockedIds]);
 
-  const groupedAchievements = React.useMemo(() => {
+  const groupLabelByType = useCallback((type: Achievement['type']) => {
+    switch (type) {
+      case 'streak':
+        return t('achievements_group_streak');
+      case 'entries':
+        return t('achievements_group_entries');
+      case 'images':
+        return t('achievements_group_images');
+      case 'words':
+        return t('achievements_group_words');
+      case 'multiDay':
+        return t('achievements_group_productivity');
+      case 'shared':
+        return t('achievements_group_sharing');
+      case 'location':
+        return t('achievements_group_locations');
+      case 'earlyBird':
+        return t('achievements_group_mornings');
+      case 'nightOwl':
+        return t('achievements_group_evenings');
+      case 'weekend':
+        return t('achievements_group_weekends');
+      case 'photoCollection':
+        return t('achievements_group_photo_collections');
+      default:
+        return t('achievements_group_other');
+    }
+  }, [t]);
+
+  const groupedAchievements = useMemo(() => {
     const groups: { [key: string]: Achievement[] } = {};
-    
-    achievements.forEach((achievement) => {
-      const type = achievement.type;
-      let groupName = '';
-      
-      switch (type) {
-        case 'streak':
-          groupName = '🔥 Päivittäiset putket';
-          break;
-        case 'entries':
-          groupName = '📝 Merkinnät';
-          break;
-        case 'images':
-          groupName = '📷 Kuvat';
-          break;
-        case 'words':
-          groupName = '💬 Sanamäärät';
-          break;
-        case 'multiDay':
-          groupName = '⚡ Tuottavuus';
-          break;
-        case 'shared':
-          groupName = '🔗 Jakamiset';
-          break;
-        case 'location':
-          groupName = '📍 Sijainnit';
-          break;
-        case 'earlyBird':
-          groupName = '🌅 Aamut';
-          break;
-        case 'nightOwl':
-          groupName = '🦉 Illat';
-          break;
-        case 'weekend':
-          groupName = '🎉 Viikonloput';
-          break;
-        case 'photoCollection':
-          groupName = '🎞️ Kuvakokoelmat';
-          break;
-        default:
-          groupName = '🏆 Muut';
+
+    const sortedByTypeAndRequirement = [...achievements].sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type.localeCompare(b.type);
       }
+      return a.requirement - b.requirement;
+    });
+
+    sortedByTypeAndRequirement.forEach((baseAchievement) => {
+      const achievement = getLocalizedAchievement(baseAchievement, language);
+      const groupName = groupLabelByType(baseAchievement.type);
       
       if (!groups[groupName]) {
         groups[groupName] = [];
       }
       groups[groupName].push(achievement);
     });
-    
+
     return groups;
-  }, []);
+  }, [groupLabelByType, language]);
+
+  const unlockedGroups = useMemo(() => {
+    return Object.entries(groupedAchievements)
+      .map(([groupName, groupAchievements]) => [
+        groupName,
+        groupAchievements.filter((achievement) => unlockedIds.includes(achievement.id)),
+      ] as const)
+      .filter(([, groupAchievements]) => groupAchievements.length > 0);
+  }, [groupedAchievements, unlockedIds]);
+
+  const inProgressGroups = useMemo(() => {
+    return Object.entries(groupedAchievements)
+      .map(([groupName, groupAchievements]) => [
+        groupName,
+        groupAchievements.filter((achievement) => !unlockedIds.includes(achievement.id)),
+      ] as const)
+      .filter(([, groupAchievements]) => groupAchievements.length > 0);
+  }, [groupedAchievements, unlockedIds]);
 
   const unlockedCount = unlockedIds.length;
   const totalCount = achievements.length;
+  const progressPercent = useMemo(() => {
+    if (totalCount === 0) return 0;
+    return (unlockedCount / totalCount) * 100;
+  }, [totalCount, unlockedCount]);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }] }>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }]}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>← Takaisin</Text>
+          <Text style={[styles.backButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Saavutukset</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('achievements_header')}</Text>
         <View style={styles.headerRight} />
       </View>
 
       {/* Progress Summary */}
-      <View style={styles.progressContainer}>
-        <Text style={styles.progressText}>
-          {unlockedCount} / {totalCount} avattu
+      <View style={[styles.progressContainer, { backgroundColor: theme.colors.white }] }>
+        <Text style={[styles.progressText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
+          {t('achievements_progress', { unlocked: unlockedCount, total: totalCount })}
         </Text>
-        <View style={styles.progressBar}>
+        <View style={[styles.progressBar, { backgroundColor: isDark ? '#1E293B' : colors.gray200 }]}>
           <View
             style={[
               styles.progressFill,
-              { width: `${(unlockedCount / totalCount) * 100}%` },
+              { width: `${progressPercent}%`, backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary },
             ]}
           />
         </View>
@@ -175,13 +194,28 @@ export default function AchievementsScreen({ navigation }: any) {
 
       {/* Achievements List */}
       <ScrollView style={styles.scrollView}>
-        {Object.entries(groupedAchievements).map(([groupName, groupAchievements]) => (
-          <View key={groupName} style={styles.group}>
-            <Text style={styles.groupTitle}>{groupName}</Text>
+        <View style={styles.group}>
+          <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Saavutetut</Text>
+        </View>
+        {unlockedGroups.map(([groupName, groupAchievements]) => (
+          <View key={`unlocked-${groupName}`} style={styles.group}>
+            <Text style={styles.groupSubtitle}>{groupName}</Text>
             {groupAchievements.map((achievement) => (
-              <View key={achievement.id}>
-                {renderAchievement({ item: achievement })}
-              </View>
+              <React.Fragment key={achievement.id}>{renderAchievement({ item: achievement })}</React.Fragment>
+            ))}
+          </View>
+        ))}
+
+        <View style={styles.groupDivider} />
+
+        <View style={styles.group}>
+          <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Kesken</Text>
+        </View>
+        {inProgressGroups.map(([groupName, groupAchievements]) => (
+          <View key={`progress-${groupName}`} style={styles.group}>
+            <Text style={styles.groupSubtitle}>{groupName}</Text>
+            {groupAchievements.map((achievement) => (
+              <React.Fragment key={achievement.id}>{renderAchievement({ item: achievement })}</React.Fragment>
             ))}
           </View>
         ))}
@@ -259,6 +293,18 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.sm,
   },
+  groupSubtitle: {
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+  },
+  groupDivider: {
+    height: 1,
+    backgroundColor: colors.borderLight,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+  },
   achievementItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -286,7 +332,6 @@ const styles = StyleSheet.create({
   },
   achievementIconLocked: {
     opacity: 0.3,
-    filter: 'grayscale(100%)',
   },
   achievementContent: {
     flex: 1,

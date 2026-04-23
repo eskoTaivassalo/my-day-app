@@ -17,6 +17,8 @@ LogBox.ignoreLogs([
 
 // Auth
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
+import { LanguageProvider, useLanguage } from './src/contexts/LanguageContext';
+import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -41,6 +43,9 @@ const Stack = createNativeStackNavigator();
 
 // Main tab navigator
 function MainTabs() {
+  const { t } = useLanguage();
+  const { theme } = useTheme();
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -49,23 +54,24 @@ function MainTabs() {
           height: 90,
           paddingBottom: 30,
           paddingTop: 10,
-          backgroundColor: '#fff',
+          backgroundColor: theme.colors.background,
           borderTopWidth: 1,
-          borderTopColor: '#e0e0e0',
+          borderTopColor: theme.colors.border,
         },
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: '600',
+          fontFamily: theme.fonts.bodyFamily,
         },
-        tabBarActiveTintColor: '#007AFF',
-        tabBarInactiveTintColor: '#999',
+        tabBarActiveTintColor: theme.colors.primary,
+        tabBarInactiveTintColor: theme.colors.textSecondary,
       }}
     >
       <Tab.Screen
         name="Timeline"
         component={TimelineScreen}
         options={{
-          title: 'Aikajana',
+          title: t('tab_timeline'),
           tabBarIcon: ({ color }) => <TabIcon icon="📖" color={color} />,
         }}
       />
@@ -73,7 +79,7 @@ function MainTabs() {
         name="Calendar"
         component={CalendarScreen}
         options={{
-          title: 'Kalenteri',
+          title: t('tab_calendar'),
           tabBarIcon: ({ color }) => <TabIcon icon="📅" color={color} />,
         }}
       />
@@ -81,7 +87,7 @@ function MainTabs() {
         name="Documents"
         component={DocumentsScreen}
         options={{
-          title: 'Dokumentit',
+          title: t('tab_documents'),
           tabBarIcon: ({ color }) => <TabIcon icon="📄" color={color} />,
         }}
       />
@@ -197,25 +203,22 @@ function AppNavigator() {
 // Root navigator with auth check
 function RootNavigator() {
   const { user, loading, encryptionStatus } = useAuth();
+  const { t } = useLanguage();
+  const { theme } = useTheme();
   const notificationListener = useRef<Notifications.Subscription | null>(null);
 
   useEffect(() => {
     if (user) {
-      console.log(`🚀 [App] User logged in: ${user.email}, initializing notifications...`);
-      // Initialize notifications when user is logged in
       initializeNotifications();
-    } else {
-      console.log('🚀 [App] User logged out');
     }
   }, [user]);
-
 
   useEffect(() => {
     notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
       const type = notification.request.content.data?.type;
 
       if (type === 'reminder') {
-        Alert.alert('⏰ Muistutus', notification.request.content.body || 'Muistutus');
+        Alert.alert(t('notification_reminder_title'), notification.request.content.body || '');
       }
     });
 
@@ -224,38 +227,40 @@ function RootNavigator() {
         notificationListener.current.remove();
       }
     };
-  }, []);
+  }, [t]);
 
 
   if (loading) {
-    console.log('🚀 [App] Auth loading...');
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={{ marginTop: 20 }}>Ladataan...</Text>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background }}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+        <Text style={{ marginTop: 20, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }}>
+          {t('common_loading')}
+        </Text>
       </View>
     );
   }
 
   // Salauksen asetus tai avaus vaaditaan ennen kuin sovellus on käytettävissä
   if (user && (encryptionStatus === 'needs_setup' || encryptionStatus === 'needs_passphrase')) {
-    console.log(`🔐 [App] Encryption status: ${encryptionStatus}, showing passphrase screen`);
     return <EncryptionPassphraseScreen />;
   }
 
-  console.log(`🚀 [App] Showing ${user ? 'AppNavigator' : 'AuthNavigator'}`);
   return user ? <AppNavigator /> : <AuthNavigator />;
 }
 
 // Main App component
 export default function App() {
-  console.log('🚀 [App] App starting...');
   return (
-    <AuthProvider>
-      <NavigationContainer>
-        <StatusBar style="auto" />
-        <RootNavigator />
-      </NavigationContainer>
-    </AuthProvider>
+    <LanguageProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <NavigationContainer>
+            <StatusBar style="auto" />
+            <RootNavigator />
+          </NavigationContainer>
+        </AuthProvider>
+      </ThemeProvider>
+    </LanguageProvider>
   );
 }

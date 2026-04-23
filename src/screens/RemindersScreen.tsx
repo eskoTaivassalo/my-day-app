@@ -13,6 +13,9 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
 import {
   getReminders,
   saveReminder,
@@ -23,18 +26,27 @@ import {
   createCalendarEvent,
   Reminder,
 } from '../services/reminderService';
-import * as Notifications from 'expo-notifications';
 
 export default function RemindersScreen({ navigation }: any) {
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
   const [dateTime, setDateTime] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [permissionStatus, setPermissionStatus] = useState<'unknown' | 'granted' | 'denied'>('unknown');
-  const [scheduledCount, setScheduledCount] = useState(0);
+  const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  const resetForm = () => {
+    setTitle('');
+    setNotes('');
+    setDateTime(new Date());
+    setEditingReminder(null);
+  };
 
   const loadReminders = async () => {
     const data = await getReminders();
@@ -46,41 +58,29 @@ export default function RemindersScreen({ navigation }: any) {
   const onRefresh = async () => {
     setRefreshing(true);
     await loadReminders();
-    await loadNotificationDebug();
     setRefreshing(false);
   };
 
   useEffect(() => {
     loadReminders();
-    loadNotificationDebug();
   }, []);
 
   useFocusEffect(
     React.useCallback(() => {
       loadReminders();
-      loadNotificationDebug();
     }, [])
   );
 
-  const loadNotificationDebug = async () => {
-    try {
-      const { status } = await Notifications.getPermissionsAsync();
-      setPermissionStatus(status === 'granted' ? 'granted' : 'denied');
-      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-      setScheduledCount(scheduled.length);
-    } catch (error) {
-      console.error('Error loading notification debug info:', error);
-    }
-  };
-
   const handleSave = async () => {
+    const isEditing = editingReminder !== null;
+
     if (!title.trim()) {
-      Alert.alert('Puuttuu otsikko', 'Lisää muistutukselle otsikko.');
+      Alert.alert(t('reminders_missing_title'), t('reminders_missing_title_msg'));
       return;
     }
 
     if (dateTime.getTime() <= Date.now()) {
-      Alert.alert('Aika on mennyt', 'Valitse tuleva päivämäärä ja kellonaika.');
+      Alert.alert(t('reminders_time_passed'), t('reminders_time_passed_msg'));
       return;
     }
 
@@ -96,43 +96,65 @@ export default function RemindersScreen({ navigation }: any) {
     }
 
     const reminder: Reminder = {
-      id: `${Date.now()}`,
+      id: editingReminder?.id ?? `${Date.now()}`,
       title: title.trim(),
       dateTime: dateTime.toISOString(),
       notes: notes.trim() || undefined,
-      createdAt: new Date().toISOString(),
+      createdAt: editingReminder?.createdAt ?? new Date().toISOString(),
       notificationId: notificationId || undefined,
       calendarEventId: calendarEventId || undefined,
     };
 
+    if (isEditing && editingReminder) {
+      await deleteReminder(
+        editingReminder.id,
+        editingReminder.notificationId,
+        editingReminder.calendarEventId
+      );
+    }
+
     await saveReminder(reminder);
-    setTitle('');
-    setNotes('');
-    setDateTime(new Date());
+    resetForm();
     await loadReminders();
-    await loadNotificationDebug();
 
     Alert.alert(
-      'Muistutus tallennettu',
+      isEditing ? t('reminders_updated_title') : t('reminders_saved_title'),
       notificationId
-        ? 'Muistutus lisätty ja ilmoitus ajastettu.'
-        : 'Muistutus lisätty, mutta ilmoitusta ei ajastettu.'
+        ? (isEditing
+            ? t('reminders_updated_with_notification')
+            : t('reminders_saved_with_notification'))
+        : (isEditing
+            ? t('reminders_updated_without_notification')
+            : t('reminders_saved_without_notification'))
     );
   };
 
   const handleDelete = (id: string, notificationId?: string, calendarEventId?: string) => {
-    Alert.alert('Poista muistutus', 'Haluatko poistaa muistutuksen?', [
-      { text: 'Peruuta', style: 'cancel' },
+    Alert.alert(t('reminders_delete_title'), t('reminders_delete_confirm'), [
+      { text: t('common_cancel'), style: 'cancel' },
       {
-        text: 'Poista',
+        text: t('reminders_delete_button'),
         style: 'destructive',
         onPress: async () => {
           await deleteReminder(id, notificationId, calendarEventId);
           await loadReminders();
-          await loadNotificationDebug();
+          if (editingReminder?.id === id) {
+            resetForm();
+          }
         },
       },
     ]);
+  };
+
+  const handleEditPress = (reminder: Reminder) => {
+    setEditingReminder(reminder);
+    setTitle(reminder.title);
+    setNotes(reminder.notes || '');
+    setDateTime(new Date(reminder.dateTime));
+  };
+
+  const handleCancelEdit = () => {
+    resetForm();
   };
 
   const onChangeDate = (_event: any, selectedDate?: Date) => {
@@ -153,109 +175,145 @@ export default function RemindersScreen({ navigation }: any) {
     }
   };
 
-  const formattedDate = dateTime.toLocaleDateString('fi-FI', {
+  const formattedDate = dateTime.toLocaleDateString(locale, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
     year: 'numeric',
   });
 
-  const formattedTime = dateTime.toLocaleTimeString('fi-FI', {
+  const formattedTime = dateTime.toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
   });
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }] }>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>← Takaisin</Text>
+          <Text style={[styles.backButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Uusi muistutus</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('reminders_header')}</Text>
         <View style={styles.headerRight} />
       </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
+            tintColor={theme.colors.primary}
+            colors={[theme.colors.primary]}
           />
         }
       >
-        <View style={styles.debugCard}>
-          <Text style={styles.debugTitle}>Ilmoitusten tila</Text>
-          <Text style={styles.debugText}>
-            Lupa: {permissionStatus === 'granted' ? 'myönnetty' : 'ei myönnetty'}
-          </Text>
-          <Text style={styles.debugText}>Ajastettuja ilmoituksia: {scheduledCount}</Text>
-          <TouchableOpacity style={styles.debugButton} onPress={loadNotificationDebug}>
-            <Text style={styles.debugButtonText}>Päivitä tila</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.card}>
-          <Text style={styles.label}>Otsikko</Text>
+        <View style={[styles.card, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border }]}>
+          <View style={styles.formHeaderRow}>
+            <Text style={[styles.formTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
+              {editingReminder ? t('reminders_update_button') : t('reminders_header')}
+            </Text>
+            {editingReminder && (
+              <View style={[styles.editingPill, { backgroundColor: theme.colors.primary }] }>
+                <Text style={[styles.editingPillText, { fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_edit_button')}</Text>
+              </View>
+            )}
+          </View>
+
+          {editingReminder && (
+            <Text style={[styles.editingLabel, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_editing_label')}</Text>
+          )}
+
+          <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_title_label')}</Text>
           <TextInput
-            style={styles.input}
-            placeholder="Esim. Soita hammaslääkäri"
-            placeholderTextColor={colors.textSecondary}
+            style={[styles.input, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+            placeholder={t('reminders_title_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={title}
             onChangeText={setTitle}
           />
 
-          <Text style={styles.label}>Päivämäärä</Text>
-          <TouchableOpacity style={styles.pickerButton} onPress={() => setShowDatePicker(true)}>
-            <Text style={styles.pickerText}>{formattedDate}</Text>
-          </TouchableOpacity>
+          <View style={styles.pickerRow}>
+            <View style={styles.pickerColumn}>
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_date_label')}</Text>
+              <TouchableOpacity style={[styles.pickerButton, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border }]} onPress={() => setShowDatePicker(true)}>
+                <Text style={[styles.pickerText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{formattedDate}</Text>
+              </TouchableOpacity>
+            </View>
 
-          <Text style={styles.label}>Kellonaika</Text>
-          <TouchableOpacity style={styles.pickerButton} onPress={() => setShowTimePicker(true)}>
-            <Text style={styles.pickerText}>{formattedTime}</Text>
-          </TouchableOpacity>
+            <View style={styles.pickerColumn}>
+              <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_time_label')}</Text>
+              <TouchableOpacity style={[styles.pickerButton, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border }]} onPress={() => setShowTimePicker(true)}>
+                <Text style={[styles.pickerText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{formattedTime}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-          <Text style={styles.label}>Muistiinpanot</Text>
+          <Text style={[styles.label, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_notes_label')}</Text>
           <TextInput
-            style={[styles.input, styles.textArea]}
-            placeholder="Lisätiedot (valinnainen)"
-            placeholderTextColor={colors.textSecondary}
+            style={[styles.input, styles.textArea, { backgroundColor: isDark ? '#0B1220' : colors.gray50, borderColor: theme.colors.border, color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}
+            placeholder={t('reminders_notes_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={notes}
             onChangeText={setNotes}
             multiline
           />
 
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-            <Text style={styles.saveButtonText}>Tallenna muistutus</Text>
+          <TouchableOpacity style={[styles.saveButton, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }]} onPress={handleSave}>
+            <Text style={[styles.saveButtonText, { fontFamily: theme.fonts.bodyFamily }]}>
+              {editingReminder ? t('reminders_update_button') : t('reminders_save_button')}
+            </Text>
           </TouchableOpacity>
+
+          {editingReminder && (
+            <TouchableOpacity style={[styles.cancelEditButton, { backgroundColor: theme.colors.white, borderColor: theme.colors.border }]} onPress={handleCancelEdit}>
+              <Text style={[styles.cancelEditButtonText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_cancel_edit_button')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {reminders.length > 0 && (
-          <View style={styles.listCard}>
-            <Text style={styles.listTitle}>Tulevat muistutukset</Text>
-            {reminders.map((reminder) => (
-              <View key={reminder.id} style={styles.listItem}>
+        <View style={[styles.listCard, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border }]}>
+          <View style={styles.listHeaderRow}>
+            <Text style={[styles.listTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('reminders_upcoming')}</Text>
+            <View style={[styles.countBadge, { backgroundColor: theme.colors.primary }] }>
+              <Text style={[styles.countBadgeText, { fontFamily: theme.fonts.bodyFamily }]}>{reminders.length}</Text>
+            </View>
+          </View>
+
+          {reminders.length > 0 ? (
+            reminders.map((reminder) => (
+              <View key={reminder.id} style={[styles.listItem, { backgroundColor: isDark ? '#1E293B' : colors.gray50 }]}>
                 <View style={styles.listTextContainer}>
-                  <Text style={styles.listItemTitle}>{reminder.title}</Text>
-                  <Text style={styles.listItemMeta}>
-                    {new Date(reminder.dateTime).toLocaleDateString('fi-FI')} •{' '}
-                    {new Date(reminder.dateTime).toLocaleTimeString('fi-FI', {
+                  <Text style={[styles.listItemTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{reminder.title}</Text>
+                  <Text style={[styles.listItemMeta, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                    {new Date(reminder.dateTime).toLocaleDateString(locale)} •{' '}
+                    {new Date(reminder.dateTime).toLocaleTimeString(locale, {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.deleteButton}
-                  onPress={() => handleDelete(reminder.id, reminder.notificationId, reminder.calendarEventId)}
-                >
-                  <Text style={styles.deleteButtonText}>Poista</Text>
-                </TouchableOpacity>
+                <View style={styles.listActions}>
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => handleDelete(reminder.id, reminder.notificationId, reminder.calendarEventId)}
+                  >
+                    <Text style={styles.deleteButtonText}>{t('reminders_delete_button')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.editButton} onPress={() => handleEditPress(reminder)}>
+                    <Text style={styles.editButtonText}>{t('reminders_edit_button')}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            ))}
-          </View>
-        )}
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateTitle}>{t('reminders_upcoming')}</Text>
+              <Text style={styles.emptyStateText}>{t('calendar_empty')}</Text>
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       {showDatePicker && (
@@ -310,72 +368,83 @@ const styles = StyleSheet.create({
     width: 100,
   },
   content: {
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxl,
     gap: spacing.lg,
-  },
-  debugCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    padding: spacing.lg,
-    ...shadows.sm,
-  },
-  debugTitle: {
-    fontSize: typography.fontSizes.md,
-    fontWeight: typography.fontWeights.bold,
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
-  debugText: {
-    fontSize: typography.fontSizes.sm,
-    color: colors.textSecondary,
-    marginBottom: spacing.xs,
-  },
-  debugButton: {
-    marginTop: spacing.sm,
-    alignSelf: 'flex-start',
-    backgroundColor: colors.gray100,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.full,
-  },
-  debugButtonText: {
-    fontSize: typography.fontSizes.sm,
-    color: colors.textSecondary,
   },
   card: {
     backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.xxl,
     padding: spacing.lg,
-    ...shadows.sm,
+    borderWidth: 1,
+    borderColor: colors.gray100,
+    ...shadows.md,
+  },
+  formHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  formTitle: {
+    fontSize: typography.fontSizes.lg,
+    fontWeight: typography.fontWeights.bold,
+    color: colors.text,
+  },
+  editingPill: {
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+  },
+  editingPillText: {
+    fontSize: typography.fontSizes.xs,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.white,
+  },
+  editingLabel: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
   },
   label: {
     fontSize: typography.fontSizes.sm,
     fontWeight: typography.fontWeights.semibold,
-    color: colors.text,
+    color: colors.gray700,
     marginBottom: spacing.xs,
     marginTop: spacing.md,
   },
   input: {
     borderWidth: 1,
     borderColor: colors.gray200,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.xl,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
     fontSize: typography.fontSizes.md,
     color: colors.text,
     backgroundColor: colors.gray50,
   },
   textArea: {
-    minHeight: 90,
+    minHeight: 110,
     textAlignVertical: 'top',
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  pickerColumn: {
+    flex: 1,
   },
   pickerButton: {
     borderWidth: 1,
     borderColor: colors.gray200,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.xl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     backgroundColor: colors.gray50,
+    minHeight: 52,
+    justifyContent: 'center',
   },
   pickerText: {
     fontSize: typography.fontSizes.md,
@@ -385,33 +454,70 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.xl,
     alignItems: 'center',
+    ...shadows.sm,
   },
   saveButtonText: {
     color: colors.white,
     fontWeight: typography.fontWeights.bold,
     fontSize: typography.fontSizes.md,
   },
+  cancelEditButton: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.gray300,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    backgroundColor: colors.white,
+  },
+  cancelEditButtonText: {
+    color: colors.textSecondary,
+    fontWeight: typography.fontWeights.semibold,
+    fontSize: typography.fontSizes.md,
+  },
   listCard: {
     backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.xxl,
     padding: spacing.lg,
-    ...shadows.sm,
+    borderWidth: 1,
+    borderColor: colors.gray100,
+    ...shadows.md,
+  },
+  listHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
   },
   listTitle: {
     fontSize: typography.fontSizes.lg,
     fontWeight: typography.fontWeights.bold,
     color: colors.text,
-    marginBottom: spacing.md,
+  },
+  countBadge: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  countBadgeText: {
+    color: colors.white,
+    fontWeight: typography.fontWeights.bold,
+    fontSize: typography.fontSizes.sm,
   },
   listItem: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray100,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.gray50,
+    marginBottom: spacing.sm,
   },
   listTextContainer: {
     flex: 1,
@@ -421,20 +527,56 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSizes.md,
     fontWeight: typography.fontWeights.semibold,
     color: colors.text,
+    marginBottom: 2,
   },
   listItemMeta: {
     fontSize: typography.fontSizes.sm,
     color: colors.textSecondary,
-    marginTop: spacing.xs,
+  },
+  listActions: {
+    alignItems: 'stretch',
+    gap: spacing.xs,
+    minWidth: 92,
   },
   deleteButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
-    backgroundColor: colors.gray100,
+    backgroundColor: colors.gray200,
     borderRadius: borderRadius.full,
   },
   deleteButtonText: {
     color: colors.textSecondary,
     fontSize: typography.fontSizes.sm,
+    textAlign: 'center',
+    fontWeight: typography.fontWeights.semibold,
+  },
+  editButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.primaryLight,
+    borderRadius: borderRadius.full,
+  },
+  editButtonText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+    textAlign: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.xl,
+    backgroundColor: colors.gray50,
+    borderRadius: borderRadius.lg,
+  },
+  emptyStateTitle: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
+  },
+  emptyStateText: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textLight,
   },
 });

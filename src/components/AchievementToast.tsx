@@ -7,8 +7,9 @@ import {
   Dimensions,
   TouchableOpacity,
 } from 'react-native';
+import { useLanguage } from '../contexts/LanguageContext';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/theme';
-import { Achievement } from '../utils/achievementUtils';
+import { Achievement, getLocalizedAchievement } from '../utils/achievementUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -19,6 +20,7 @@ interface ToastProps {
 }
 
 export default function AchievementToast({ achievement, visible, onHide }: ToastProps) {
+  const { t, language } = useLanguage();
   const translateY = useRef(new Animated.Value(-200)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.8)).current;
@@ -94,6 +96,8 @@ export default function AchievementToast({ achievement, visible, onHide }: Toast
 
   if (!achievement) return null;
 
+  const localizedAchievement = getLocalizedAchievement(achievement, language);
+
   const iconRotation = iconRotate.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
@@ -125,9 +129,9 @@ export default function AchievementToast({ achievement, visible, onHide }: Toast
           </Animated.Text>
         </View>
         <View style={styles.content}>
-          <Text style={styles.badge}>✨ Saavutus avattu!</Text>
-          <Text style={styles.name}>{achievement.name}</Text>
-          <Text style={styles.description}>{achievement.description}</Text>
+          <Text style={styles.badge}>{t('achievements_toast_unlocked')}</Text>
+          <Text style={styles.name}>{localizedAchievement.name}</Text>
+          <Text style={styles.description}>{localizedAchievement.description}</Text>
         </View>
       </TouchableOpacity>
     </Animated.View>

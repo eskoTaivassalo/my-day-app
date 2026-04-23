@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,9 +14,12 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { Video, ResizeMode } from 'expo-av';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useAuth } from '../contexts/AuthContext';
-import { createEntry, uploadImages, uploadVideo, uploadVideos } from '../services/diaryService';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getLocaleFromLanguage } from '../i18n/locale';
+import { createEntry, uploadImages, uploadVideos } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography } from '../theme/theme';
 
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
@@ -28,19 +31,141 @@ export default function NewEntryScreen({ navigation }: any) {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [selectedVideos, setSelectedVideos] = useState<string[]>([]);
+  const [selectedVideoThumbnails, setSelectedVideoThumbnails] = useState<Record<string, string>>({});
   const [layout, setLayout] = useState<LayoutType>('grid');
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address?: string } | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const { user } = useAuth();
+  const { t, language } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
+  const locale = getLocaleFromLanguage(language);
+  const skipDiscardPromptRef = useRef(false);
+
+  const hasDraftChanges = () => {
+    return (
+      title.trim().length > 0 ||
+      content.trim().length > 0 ||
+      selectedImages.length > 0 ||
+      selectedVideos.length > 0 ||
+      !!location ||
+      layout !== 'grid'
+    );
+  };
+
+  const resolveVideoThumbnailsForUris = async (uris: string[]) => {
+    const uniqueUris = Array.from(new Set(uris));
+    if (uniqueUris.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      uniqueUris.map(async (uri) => {
+        const generated = await VideoThumbnails.getThumbnailAsync(uri, {
+          time: 0,
+          quality: 0.35,
+        });
+
+        return { uri, thumbnailUri: generated?.uri };
+      })
+    );
+
+    setSelectedVideoThumbnails((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          return;
+        }
+
+        const { uri, thumbnailUri } = result.value;
+        if (!thumbnailUri || next[uri] === thumbnailUri) {
+          return;
+        }
+
+        next[uri] = thumbnailUri;
+        changed = true;
+      });
+
+      return changed ? next : prev;
+    });
+  };
+
+  const confirmDiscardDraft = (onConfirm: () => void) => {
+    Alert.alert(
+      t('new_entry_discard_title'),
+      t('new_entry_discard_msg'),
+      [
+        { text: t('common_no'), style: 'cancel' },
+        {
+          text: t('common_yes'),
+          style: 'destructive',
+          onPress: () => {
+            skipDiscardPromptRef.current = true;
+            onConfirm();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCancelEntry = () => {
+    if (!hasDraftChanges() || saving) {
+      navigation.goBack();
+      return;
+    }
+
+    confirmDiscardDraft(() => navigation.goBack());
+  };
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+      if (skipDiscardPromptRef.current || saving || !hasDraftChanges()) {
+        return;
+      }
+
+      e.preventDefault();
+      confirmDiscardDraft(() => navigation.dispatch(e.data.action));
+    });
+
+    return unsubscribe;
+  }, [navigation, saving, title, content, selectedImages, selectedVideos, location, layout]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const resolveSelectedVideoThumbnails = async () => {
+      const missingUris = selectedVideos.filter((uri) => !selectedVideoThumbnails[uri]);
+      if (missingUris.length > 0) {
+        await resolveVideoThumbnailsForUris(missingUris);
+      }
+
+      if (!isMounted) {
+        return;
+      }
+
+      setSelectedVideoThumbnails((prev) => {
+        const nextEntries = Object.entries(prev).filter(([uri]) => selectedVideos.includes(uri));
+        return nextEntries.length === Object.keys(prev).length ? prev : Object.fromEntries(nextEntries);
+      });
+    };
+
+    void resolveSelectedVideoThumbnails();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedVideos, selectedVideoThumbnails]);
 
   const getLocation = async () => {
     setLoadingLocation(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Lupa tarvitaan', 'Sijainnin käyttöoikeus tarvitaan paikan lisäämiseen.');
+        Alert.alert(t('common_permission_required'), t('entry_location_permission'));
         return;
       }
 
@@ -55,14 +180,13 @@ export default function NewEntryScreen({ navigation }: any) {
           : undefined;
         
         setLocation({ latitude, longitude, address });
-        Alert.alert('Sijainti lisätty', address || 'Sijainti tallennettu');
+        Alert.alert(t('common_location_added'), address || t('common_location_saved'));
       } catch {
         setLocation({ latitude, longitude });
-        Alert.alert('Sijainti lisätty', 'Sijainti tallennettu');
+        Alert.alert(t('common_location_added'), t('common_location_saved'));
       }
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Virhe', 'Sijainnin hakeminen epäonnistui');
+    } catch {
+      Alert.alert(t('common_error'), t('entry_location_failed'));
     } finally {
       setLoadingLocation(false);
     }
@@ -77,7 +201,7 @@ export default function NewEntryScreen({ navigation }: any) {
 
     if (!result.canceled && result.assets) {
       const newImages = result.assets.map((asset) => asset.uri);
-      setSelectedImages([...selectedImages, ...newImages]);
+      setSelectedImages((prev) => [...prev, ...newImages]);
     }
   };
 
@@ -85,7 +209,7 @@ export default function NewEntryScreen({ navigation }: any) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
-      Alert.alert('Lupa tarvitaan', 'Kameran käyttöoikeus tarvitaan kuvan ottamiseen.');
+      Alert.alert(t('common_permission_required'), t('entry_camera_photo_permission'));
       return;
     }
 
@@ -96,24 +220,26 @@ export default function NewEntryScreen({ navigation }: any) {
     });
 
     if (!result.canceled && result.assets) {
-      setSelectedImages([...selectedImages, result.assets[0].uri]);
+      setSelectedImages((prev) => [...prev, result.assets[0].uri]);
     }
   };
 
   const removeSelectedImage = (uri: string) => {
-    setSelectedImages(selectedImages.filter((img) => img !== uri));
+    setSelectedImages((prev) => prev.filter((img) => img !== uri));
   };
 
   const pickVideoFromGallery = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: 'videos',
       allowsMultipleSelection: true,
+      selectionLimit: 0,
       quality: 1,
     });
 
     if (!result.canceled && result.assets) {
       const newVideos = result.assets.map((asset) => asset.uri);
-      setSelectedVideos([...selectedVideos, ...newVideos]);
+      setSelectedVideos((prev) => [...prev, ...newVideos]);
+      void resolveVideoThumbnailsForUris(newVideos);
     }
   };
 
@@ -121,7 +247,7 @@ export default function NewEntryScreen({ navigation }: any) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
-      Alert.alert('Lupa tarvitaan', 'Kameran käyttöoikeus tarvitaan videon tallentamiseen.');
+      Alert.alert(t('common_permission_required'), t('entry_camera_permission'));
       return;
     }
 
@@ -132,18 +258,25 @@ export default function NewEntryScreen({ navigation }: any) {
     });
 
     if (!result.canceled && result.assets) {
-      setSelectedVideos([...selectedVideos, result.assets[0].uri]);
+      setSelectedVideos((prev) => [...prev, result.assets[0].uri]);
+      void resolveVideoThumbnailsForUris([result.assets[0].uri]);
     }
   };
 
   const removeSelectedVideo = (uri: string) => {
-    setSelectedVideos(selectedVideos.filter((video) => video !== uri));
+    setSelectedVideos((prev) => prev.filter((video) => video !== uri));
+    setSelectedVideoThumbnails((prev) => {
+      if (!prev[uri]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[uri];
+      return next;
+    });
   };
 
   const renderImages = () => {
     if (selectedImages.length === 0) return null;
-
-    const imageWidth = 280;
 
     switch (layout) {
       case 'grid':
@@ -232,14 +365,22 @@ export default function NewEntryScreen({ navigation }: any) {
     return (
       <View style={previewStyles.videoContainer}>
         {selectedVideos.map((uri, index) => (
-          <View key={index} style={previewStyles.videoWrapper}>
-            <Video
-              source={{ uri }}
-              style={previewStyles.video}
-              resizeMode={ResizeMode.COVER}
-              shouldPlay={false}
-              useNativeControls
-            />
+          <View key={index} style={previewStyles.videoCard}>
+            {selectedVideoThumbnails[uri] ? (
+              <Image
+                source={{ uri: selectedVideoThumbnails[uri] }}
+                style={previewStyles.videoThumbnail}
+              />
+            ) : (
+              <View style={previewStyles.videoIconBadge}>
+                <Text style={previewStyles.videoIconText}>🎥</Text>
+              </View>
+            )}
+            <View style={previewStyles.videoInfo}>
+              <Text style={previewStyles.videoMeta}>
+                {t('timeline_video_badge')} {index + 1}/{selectedVideos.length}
+              </Text>
+            </View>
           </View>
         ))}
       </View>
@@ -248,17 +389,17 @@ export default function NewEntryScreen({ navigation }: any) {
 
   const handleSave = async () => {
     if (!title.trim()) {
-      Alert.alert('Puuttuva otsikko', 'Anna merkinnälle otsikko.');
+      Alert.alert(t('new_entry_missing_title'), t('new_entry_missing_title_msg'));
       return;
     }
 
     if (!content.trim()) {
-      Alert.alert('Puuttuva sisältö', 'Kirjoita jotain päiväkirjamerkintääsi.');
+      Alert.alert(t('new_entry_missing_content'), t('new_entry_missing_content_msg'));
       return;
     }
 
     if (!user) {
-      Alert.alert('Virhe', 'Sinun täytyy olla kirjautuneena tallentaaksesi merkinnän.');
+      Alert.alert(t('common_error'), t('new_entry_not_logged_in'));
       return;
     }
 
@@ -275,15 +416,9 @@ export default function NewEntryScreen({ navigation }: any) {
       let videoThumbnails: Record<string, string> = {};
       if (selectedVideos.length > 0) {
         setUploadProgress(0);
-        const videoUploadPromises = selectedVideos.map((uri, i) =>
-          uploadVideo(uri, user.uid, (progress) => {
-            // Approximate overall progress across all videos
-            setUploadProgress(Math.round(
-              ((i / selectedVideos.length) + progress / 100 / selectedVideos.length) * 100
-            ));
-          })
-        );
-        const videoAssets = await Promise.all(videoUploadPromises);
+        const videoAssets = await uploadVideos(selectedVideos, user.uid, (progress) => {
+          setUploadProgress(progress);
+        });
         videoUrls = videoAssets.map((asset) => asset.videoUrl);
         videoThumbnails = videoAssets.reduce((acc, asset) => {
           if (asset.thumbnailUrl) {
@@ -311,18 +446,20 @@ export default function NewEntryScreen({ navigation }: any) {
 
       // Show success message
       Alert.alert(
-        'Tallennettu!',
-        'Päiväkirjamerkintä on tallennettu.',
+        t('entry_saved'),
+        t('new_entry_saved'),
         [
           {
-            text: 'OK',
-            onPress: () => navigation.goBack(),
+            text: t('common_ok'),
+            onPress: () => {
+              skipDiscardPromptRef.current = true;
+              navigation.goBack();
+            },
           },
         ]
       );
-    } catch (error) {
-      console.error('Error saving entry:', error);
-      Alert.alert('Virhe', 'Merkinnän tallentaminen epäonnistui. Yritä uudelleen.');
+    } catch {
+      Alert.alert(t('common_error'), t('new_entry_save_failed'));
     } finally {
       setSaving(false);
     }
@@ -330,26 +467,26 @@ export default function NewEntryScreen({ navigation }: any) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.cancelButton}>Peruuta</Text>
+      <View style={[styles.header, { borderBottomColor: theme.colors.border, backgroundColor: theme.colors.white }] }>
+        <TouchableOpacity onPress={handleCancelEntry}>
+          <Text style={[styles.cancelButton, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_cancel')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Uusi merkintä</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('new_entry_header')}</Text>
         <TouchableOpacity onPress={handleSave} disabled={saving}>
-          <Text style={[styles.saveButton, saving && styles.saveButtonDisabled]}>
+          <Text style={[styles.saveButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }, saving && styles.saveButtonDisabled]}>
             {uploadProgress !== null
-              ? `Ladataan... ${uploadProgress}%`
-              : saving ? 'Tallennetaan...' : 'Tallenna'}
+              ? t('new_entry_loading', { progress: uploadProgress })
+              : saving ? t('common_saving') : t('common_save')}
           </Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content}>
         {/* INTERACTIVE PREVIEW CARD */}
-        <View style={styles.previewCard}>
+        <View style={[styles.previewCard, { backgroundColor: isDark ? '#111827' : theme.colors.white, borderColor: theme.colors.border, borderWidth: 1 }] }>
           {/* Date Header - Clickable */}
           <TouchableOpacity 
             style={previewStyles.entryHeader}
@@ -360,20 +497,20 @@ export default function NewEntryScreen({ navigation }: any) {
                 {selectedDate.getDate()}
               </Text>
               <Text style={previewStyles.monthText}>
-                {selectedDate.toLocaleDateString('fi-FI', { month: 'short' })}
+                {selectedDate.toLocaleDateString(locale, { month: 'short' })}
               </Text>
             </View>
             
             <View style={previewStyles.entryHeaderContent}>
               <Text style={previewStyles.entryDate}>
-                {selectedDate.toLocaleDateString('fi-FI', {
+                {selectedDate.toLocaleDateString(locale, {
                   weekday: 'long',
                   day: 'numeric',
                   month: 'long'
                 })}
               </Text>
               <Text style={previewStyles.entryTime}>
-                Napauta vaihtaaksesi päivää 📅
+                {t('entry_tap_to_change_date')}
               </Text>
             </View>
           </TouchableOpacity>
@@ -395,9 +532,17 @@ export default function NewEntryScreen({ navigation }: any) {
 
           {/* Title Input - Inline */}
           <TextInput
-            style={previewStyles.titleInput}
-            placeholder="Anna merkinnälle otsikko..."
-            placeholderTextColor="#999"
+            style={[
+              previewStyles.titleInput,
+              {
+                backgroundColor: isDark ? '#0B1220' : colors.gray50,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={t('new_entry_title_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={title}
             onChangeText={setTitle}
             maxLength={100}
@@ -405,9 +550,17 @@ export default function NewEntryScreen({ navigation }: any) {
 
           {/* Content Input - Inline */}
           <TextInput
-            style={previewStyles.contentInput}
-            placeholder="Mitä tänään tapahtui? Kirjoita tähän..."
-            placeholderTextColor="#999"
+            style={[
+              previewStyles.contentInput,
+              {
+                backgroundColor: isDark ? '#0B1220' : colors.gray50,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={t('new_entry_content_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
             value={content}
             onChangeText={setContent}
             multiline
@@ -422,70 +575,92 @@ export default function NewEntryScreen({ navigation }: any) {
 
           {/* Image Controls - Compact */}
           <View style={styles.imageControls}>
-            <TouchableOpacity style={styles.compactButton} onPress={takePhoto}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={takePhoto}>
               <Text style={styles.compactButtonIcon}>📷</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.compactButton} onPress={pickImageFromGallery}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={pickImageFromGallery}>
               <Text style={styles.compactButtonIcon}>🖼️</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.compactButton} onPress={recordVideo}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={recordVideo}>
               <Text style={styles.compactButtonIcon}>🎥</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.compactButton} onPress={pickVideoFromGallery}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={pickVideoFromGallery}>
               <Text style={styles.compactButtonIcon}>📼</Text>
             </TouchableOpacity>
+          </View>
 
-            {selectedImages.length > 0 && (
-              <>
-                <View style={styles.buttonDivider} />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.layoutScroll}>
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'grid' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('grid')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>⊞</Text>
-                  </TouchableOpacity>
+          <View style={styles.layoutSection}>
+            <Text style={[styles.layoutSectionTitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('entry_layout_selector')}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.layoutScroll}>
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'grid' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('grid')}
+              >
+                <Text style={styles.layoutCompactIcon}>⊞</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'masonry' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('masonry')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>⊟</Text>
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'masonry' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('masonry')}
+              >
+                <Text style={styles.layoutCompactIcon}>⊟</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'magazine' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('magazine')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>🗞️</Text>
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'magazine' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('magazine')}
+              >
+                <Text style={styles.layoutCompactIcon}>🗞️</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'full' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('full')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>▭</Text>
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'full' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('full')}
+              >
+                <Text style={styles.layoutCompactIcon}>▭</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'framed' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('framed')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>🖼️</Text>
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'framed' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('framed')}
+              >
+                <Text style={styles.layoutCompactIcon}>🖼️</Text>
+              </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.layoutCompactButton, layout === 'overlay' && styles.layoutCompactButtonActive]}
-                    onPress={() => setLayout('overlay')}
-                  >
-                    <Text style={styles.layoutCompactIcon}>🎭</Text>
-                  </TouchableOpacity>
-                </ScrollView>
-              </>
-            )}
+              <TouchableOpacity
+                style={[
+                  styles.layoutCompactButton,
+                  { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' },
+                  layout === 'overlay' && [styles.layoutCompactButtonActive, { backgroundColor: isDark ? '#0B1220' : '#e3f2fd', borderColor: theme.colors.primary }],
+                ]}
+                onPress={() => setLayout('overlay')}
+              >
+                <Text style={styles.layoutCompactIcon}>🎭</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
 
           {/* Selected Images Thumbnails */}
@@ -513,12 +688,16 @@ export default function NewEntryScreen({ navigation }: any) {
               <View style={styles.thumbnailContainer}>
                 {selectedVideos.map((uri, index) => (
                   <View key={index} style={styles.thumbnailWrapper}>
-                    <Video
-                      source={{ uri }}
-                      style={styles.thumbnailVideo}
-                      resizeMode={ResizeMode.COVER}
-                      shouldPlay={false}
-                    />
+                    {selectedVideoThumbnails[uri] ? (
+                      <Image source={{ uri: selectedVideoThumbnails[uri] }} style={styles.thumbnailVideoImage} />
+                    ) : (
+                      <View style={styles.thumbnailVideoPlaceholder}>
+                        <Text style={styles.thumbnailVideoIcon}>🎥</Text>
+                        <Text style={styles.thumbnailVideoLabel} numberOfLines={1}>
+                          {index + 1}
+                        </Text>
+                      </View>
+                    )}
                     <TouchableOpacity
                       style={styles.removeThumbnailButton}
                       onPress={() => removeSelectedVideo(uri)}
@@ -544,13 +723,13 @@ export default function NewEntryScreen({ navigation }: any) {
             </View>
           ) : (
             <TouchableOpacity 
-              style={styles.addLocationButton}
+              style={[styles.addLocationButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]}
               onPress={getLocation}
               disabled={loadingLocation}
             >
               <Text style={styles.addLocationIcon}>📍</Text>
-              <Text style={styles.addLocationText}>
-                {loadingLocation ? 'Haetaan sijaintia...' : 'Lisää sijainti'}
+              <Text style={[styles.addLocationText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                {loadingLocation ? t('entry_location_loading') : t('entry_add_location')}
               </Text>
             </TouchableOpacity>
           )}
@@ -558,7 +737,7 @@ export default function NewEntryScreen({ navigation }: any) {
           {/* Footer Stats */}
           <View style={previewStyles.entryFooter}>
             <Text style={previewStyles.footerHint}>
-              Näin merkintäsi näkyy aikajanalla
+              {t('new_entry_layout_hint')}
             </Text>
             {selectedImages.length > 0 && (
               <View style={previewStyles.stat}>
@@ -648,6 +827,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#e0e0e0',
     marginHorizontal: 8,
   },
+  layoutSection: {
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  layoutSectionTitle: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '600',
+    marginBottom: 8,
+  },
   layoutScroll: {
     flex: 1,
   },
@@ -685,11 +874,28 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 8,
   },
-  thumbnailVideo: {
+  thumbnailVideoImage: {
     width: 60,
     height: 60,
     borderRadius: 8,
-    backgroundColor: '#000',
+  },
+  thumbnailVideoPlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: colors.gray900,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+  },
+  thumbnailVideoIcon: {
+    fontSize: 20,
+    marginBottom: 2,
+  },
+  thumbnailVideoLabel: {
+    fontSize: 11,
+    color: colors.white,
+    fontWeight: '700',
   },
   removeThumbnailButton: {
     position: 'absolute',
@@ -880,29 +1086,61 @@ const previewStyles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.md,
   },
-  videoWrapper: {
+  videoCard: {
     width: '100%',
-    height: 220,
+    minHeight: 88,
     borderRadius: borderRadius.lg,
-    overflow: 'hidden',
-    backgroundColor: colors.black,
+    backgroundColor: colors.gray50,
+    borderWidth: 1,
+    borderColor: colors.gray200,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  video: {
-    width: '100%',
-    height: '100%',
+  videoIconBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.md,
+  },
+  videoIconText: {
+    fontSize: 22,
+  },
+  videoInfo: {
+    flex: 1,
+  },
+  videoThumbnail: {
+    width: 72,
+    height: 72,
+    borderRadius: borderRadius.md,
+    marginRight: spacing.md,
+  },
+  videoTitle: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+    marginBottom: 4,
+  },
+  videoMeta: {
+    fontSize: typography.fontSizes.sm,
+    color: colors.textSecondary,
   },
 
   // Grid Layout
   gridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
   gridImage: {
-    width: 130,
+    width: '48.5%',
     height: 130,
     borderRadius: borderRadius.md,
+    marginBottom: spacing.sm,
   },
 
   // Masonry Layout

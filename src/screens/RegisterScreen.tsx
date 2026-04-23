@@ -12,6 +12,9 @@ import {
   ScrollView,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTheme } from '../contexts/ThemeContext';
+import AppLogo from '../components/AppLogo';
 
 export default function RegisterScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
@@ -20,46 +23,49 @@ export default function RegisterScreen({ navigation }: any) {
   const [loading, setLoading] = useState(false);
   const [gdprAccepted, setGdprAccepted] = useState(false);
   const { signUp } = useAuth();
+  const { t } = useLanguage();
+  const { theme } = useTheme();
+  const isDark = theme.id === 'midnight';
 
   const handleRegister = async () => {
     // Validation
     if (!email || !password || !confirmPassword) {
-      Alert.alert('Virhe', 'Täytä kaikki kentät');
+      Alert.alert(t('common_error'), t('common_fill_all_fields'));
       return;
     }
 
     if (password.length < 6) {
-      Alert.alert('Virhe', 'Salasanan tulee olla vähintään 6 merkkiä');
+      Alert.alert(t('common_error'), t('register_password_min'));
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert('Virhe', 'Salasanat eivät täsmää');
+      Alert.alert(t('common_error'), t('register_passwords_no_match'));
       return;
     }
 
     if (!gdprAccepted) {
-      Alert.alert('Tietosuoja', 'Sinun täytyy hyväksyä tietosuojaseloste rekisteröitymispääseksä.');
+      Alert.alert(t('register_gdpr_modal_title'), t('register_gdpr_required'));
       return;
     }
 
     setLoading(true);
     try {
       await signUp(email, password);
-      Alert.alert('Onnistui!', 'Tili luotu onnistuneesti');
+      Alert.alert(t('common_success'), t('register_success'));
       // Navigation happens automatically when auth state changes
     } catch (error: any) {
-      let errorMessage = 'Rekisteröityminen epäonnistui';
+      let errorMessage = t('register_failed');
       
       if (error.message.includes('email-already-in-use')) {
-        errorMessage = 'Sähköpostiosoite on jo käytössä';
+        errorMessage = t('register_email_in_use');
       } else if (error.message.includes('invalid-email')) {
-        errorMessage = 'Virheellinen sähköpostiosoite';
+        errorMessage = t('register_invalid_email');
       } else if (error.message.includes('weak-password')) {
-        errorMessage = 'Salasana on liian heikko';
+        errorMessage = t('register_weak_password');
       }
       
-      Alert.alert('Virhe', errorMessage);
+      Alert.alert(t('common_error'), errorMessage);
     } finally {
       setLoading(false);
     }
@@ -67,7 +73,7 @@ export default function RegisterScreen({ navigation }: any) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -78,20 +84,28 @@ export default function RegisterScreen({ navigation }: any) {
               onPress={() => navigation.goBack()}
               style={styles.backButton}
             >
-              <Text style={styles.backButtonText}>← Takaisin</Text>
+              <Text style={[styles.backButtonText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_back')}</Text>
             </TouchableOpacity>
             
-            <Text style={styles.logo}>📝</Text>
-            <Text style={styles.title}>Luo tili</Text>
-            <Text style={styles.subtitle}>Aloita päiväkirjan pitäminen</Text>
+            <AppLogo />
+            <Text style={[styles.title, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('register_title')}</Text>
+            <Text style={[styles.subtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('register_subtitle')}</Text>
           </View>
 
           {/* Registration Form */}
           <View style={styles.form}>
             <TextInput
-              style={styles.input}
-              placeholder="Sähköposti"
-              placeholderTextColor="#999"
+              style={[
+                styles.input,
+                {
+                  backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                  borderColor: theme.colors.border,
+                  color: theme.colors.text,
+                  fontFamily: theme.fonts.bodyFamily,
+                },
+              ]}
+              placeholder={t('register_email_placeholder')}
+              placeholderTextColor={theme.colors.textSecondary}
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
@@ -100,9 +114,17 @@ export default function RegisterScreen({ navigation }: any) {
             />
 
             <TextInput
-              style={styles.input}
-              placeholder="Salasana (vähintään 6 merkkiä)"
-              placeholderTextColor="#999"
+              style={[
+                styles.input,
+                {
+                  backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                  borderColor: theme.colors.border,
+                  color: theme.colors.text,
+                  fontFamily: theme.fonts.bodyFamily,
+                },
+              ]}
+              placeholder={t('register_password_placeholder')}
+              placeholderTextColor={theme.colors.textSecondary}
               value={password}
               onChangeText={setPassword}
               secureTextEntry
@@ -111,9 +133,17 @@ export default function RegisterScreen({ navigation }: any) {
             />
 
             <TextInput
-              style={styles.input}
-              placeholder="Vahvista salasana"
-              placeholderTextColor="#999"
+              style={[
+                styles.input,
+                {
+                  backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                  borderColor: theme.colors.border,
+                  color: theme.colors.text,
+                  fontFamily: theme.fonts.bodyFamily,
+                },
+              ]}
+              placeholder={t('register_confirm_password_placeholder')}
+              placeholderTextColor={theme.colors.textSecondary}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry
@@ -122,14 +152,18 @@ export default function RegisterScreen({ navigation }: any) {
             />
 
             <TouchableOpacity
-              style={[styles.button, (loading || !gdprAccepted) && styles.buttonDisabled]}
+              style={[
+                styles.button,
+                { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary },
+                (loading || !gdprAccepted) && styles.buttonDisabled,
+              ]}
               onPress={handleRegister}
               disabled={loading || !gdprAccepted}
             >
               {loading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.buttonText}>Rekisteröidy</Text>
+                <Text style={[styles.buttonText, { fontFamily: theme.fonts.bodyFamily }]}>{t('register_button')}</Text>
               )}
             </TouchableOpacity>
 
@@ -139,26 +173,32 @@ export default function RegisterScreen({ navigation }: any) {
               onPress={() => setGdprAccepted(!gdprAccepted)}
               activeOpacity={0.7}
             >
-              <View style={[styles.checkbox, gdprAccepted && styles.checkboxChecked]}>
+              <View
+                style={[
+                  styles.checkbox,
+                  { borderColor: theme.colors.primary },
+                  gdprAccepted && [styles.checkboxChecked, { backgroundColor: theme.colors.primary }],
+                ]}
+              >
                 {gdprAccepted && <Text style={styles.checkmark}>✓</Text>}
               </View>
-              <Text style={styles.gdprText}>
-                Olen lukenut ja hyväksyän{' '}
+              <Text style={[styles.gdprText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                {t('register_gdpr_text')}
                 <Text
-                  style={styles.gdprLink}
+                  style={[styles.gdprLink, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}
                   onPress={() => navigation.navigate('PrivacyPolicy')}
                 >
-                  tietosuojaselosteen
+                  {t('register_gdpr_link')}
                 </Text>
-                {' '}(GDPR)
+                {t('register_gdpr_suffix')}
               </Text>
             </TouchableOpacity>
 
             {/* Login Link */}
             <View style={styles.footer}>
-              <Text style={styles.footerText}>Onko sinulla jo tili? </Text>
+              <Text style={[styles.footerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('register_have_account')}</Text>
               <TouchableOpacity onPress={() => navigation.goBack()}>
-                <Text style={styles.linkText}>Kirjaudu sisään</Text>
+                <Text style={[styles.linkText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{t('register_login_link')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -193,14 +233,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#007AFF',
   },
-  logo: {
-    fontSize: 80,
-    marginBottom: 16,
-  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#333',
+    marginTop: 12,
     marginBottom: 8,
   },
   subtitle: {
