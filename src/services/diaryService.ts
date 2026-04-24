@@ -53,6 +53,17 @@ const isEncryptedImageUrl = (url: string): boolean => {
   return /\.enc(\?|$)/.test(url);
 };
 
+const safeDecryptText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  try {
+    return decryptText(value);
+  } catch {
+    // Backward compatibility: if old plaintext data is incorrectly marked encrypted,
+    // keep rendering plaintext instead of breaking the whole entry list.
+    return value;
+  }
+};
+
 const getVideoThumbnailCachePath = (videoUrl: string): string => {
   const fileName = `${hashString(videoUrl)}.jpg`;
   return `${VIDEO_THUMBNAIL_CACHE_DIR}${fileName}`;
@@ -121,26 +132,31 @@ const uploadVideoThumbnail = async (
   try {
     const token = await auth.currentUser?.getIdToken();
     if (!token) {
+      console.warn('[uploadVideoThumbnail] No auth token');
       return undefined;
     }
 
     const bucket = process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET;
     if (!bucket) {
+      console.warn('[uploadVideoThumbnail] No Firebase bucket');
       return undefined;
     }
 
+    console.log('[uploadVideoThumbnail] Generating thumbnail from:', sourceUri);
     const generated = await VideoThumbnails.getThumbnailAsync(sourceUri, {
       time: 0,
       quality: 0.35,
     });
 
     if (!generated?.uri) {
+      console.warn('[uploadVideoThumbnail] Failed to generate thumbnail');
       return undefined;
     }
 
     generatedThumbnailUri = generated.uri;
+    console.log('[uploadVideoThumbnail] Thumbnail generated:', generatedThumbnailUri);
 
-    const filename = `video_thumbnails/${userId}/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+    const filename = `videos/${userId}/thumbnails/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
     const encodedFilename = encodeURIComponent(filename);
     const uploadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?uploadType=media&name=${encodedFilename}`;
 
@@ -154,17 +170,22 @@ const uploadVideoThumbnail = async (
     });
 
     if (!uploadResult || uploadResult.status < 200 || uploadResult.status >= 300) {
+      console.warn('[uploadVideoThumbnail] Upload failed:', uploadResult?.status);
       return undefined;
     }
 
     const responseData = JSON.parse(uploadResult.body);
     const downloadToken = responseData.downloadTokens;
     if (!downloadToken) {
+      console.warn('[uploadVideoThumbnail] No download token in response');
       return undefined;
     }
 
-    return `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedFilename}?alt=media&token=${downloadToken}`;
+    const thumbnailUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedFilename}?alt=media&token=${downloadToken}`;
+    console.log('[uploadVideoThumbnail] Thumbnail uploaded successfully:', thumbnailUrl);
+    return thumbnailUrl;
   } catch (error) {
+    console.error('[uploadVideoThumbnail] Error:', error);
     return undefined;
   } finally {
     if (generatedThumbnailUri) {
@@ -438,10 +459,18 @@ export const createEntry = async (
     if (entry.imageShape !== undefined) docData.imageShape = entry.imageShape;
     if (entry.textOverlay !== undefined) docData.textOverlay = entry.textOverlay;
 
+    console.log('[createEntry] Saving entry:', {
+      videoCount: docData.videos.length,
+      thumbnailCount: Object.keys(docData.videoThumbnails).length,
+      imageCount: docData.images.length,
+    });
+
     const docRef = await addDoc(collection(db, ENTRIES_COLLECTION), docData);
+    console.log('[createEntry] Entry saved successfully:', docRef.id);
 
     return docRef.id;
   } catch (error) {
+    console.error('[createEntry] Error saving entry:', error);
     throw error;
   }
 };
@@ -484,10 +513,27 @@ export const updateEntry = async (
         encryptedUpdates.location = nextLocation;
       }
     }
-    encryptedUpdates._encrypted = true;
+    // Do not force _encrypted=true on layout-only/metadata updates.
+    // Older plaintext entries must not be re-labeled as encrypted accidentally.
+    if (
+      updates.title !== undefined ||
+      updates.content !== undefined ||
+      updates.location?.address !== undefined
+    ) {
+      encryptedUpdates._encrypted = true;
+    }
+
+    console.log('[updateEntry] Updating entry:', {
+      id,
+      videoCount: updates.videos?.length || 0,
+      thumbnailCount: Object.keys(updates.videoThumbnails || {}).length,
+      fields: Object.keys(encryptedUpdates),
+    });
 
     await updateDoc(entryRef, encryptedUpdates);
+    console.log('[updateEntry] Entry updated successfully:', id);
   } catch (error) {
+    console.error('[updateEntry] Error updating entry:', error);
     throw error;
   }
 };
@@ -524,17 +570,25 @@ export const getEntries = async (userId: string): Promise<DiaryEntry[]> => {
 
         // Pura salaus jos kentät ovat salattuja, muuten käytä suoraan
         // (taaksepäin-yhteensopivuus vanhoille merkinnöille)
-        const title = isEncrypted ? decryptText(data.title) : data.title;
-        const content = isEncrypted ? decryptText(data.content) : data.content;
+        const title = isEncrypted ? safeDecryptText(data.title) : data.title;
+        const content = isEncrypted ? safeDecryptText(data.content) : data.content;
         const address = data.location?.address
           ? isEncrypted
-            ? decryptText(data.location.address)
+            ? safeDecryptText(data.location.address)
             : data.location.address
           : undefined;
 
         const decryptedImages = await Promise.all(
           (data.images || []).map((imageUrl: string) => decryptImageUrlToLocalUri(imageUrl))
         );
+        
+        console.log('[getEntries] Retrieved entry:', {
+          id: docSnap.id,
+          videoCount: (data.videos || []).length,
+          thumbnailCount: Object.keys(data.videoThumbnails || {}).length,
+          imageCount: decryptedImages.length,
+        });
+        
         return {
           id: docSnap.id,
           title,
@@ -596,13 +650,21 @@ export const getEntriesFast = async (
       const data = docSnap.data();
       const isEncrypted = data._encrypted === true;
 
-      const title = isEncrypted ? decryptText(data.title) : data.title;
-      const content = isEncrypted ? decryptText(data.content) : data.content;
+      const title = isEncrypted ? safeDecryptText(data.title) : data.title;
+      const content = isEncrypted ? safeDecryptText(data.content) : data.content;
       const address = data.location?.address
         ? isEncrypted
-          ? decryptText(data.location.address)
+          ? safeDecryptText(data.location.address)
           : data.location.address
         : undefined;
+
+      if ((data.videos || []).length > 0) {
+        console.log('[getEntriesFast] Retrieved entry with videos:', {
+          id: docSnap.id,
+          videoCount: data.videos.length,
+          thumbnailCount: Object.keys(data.videoThumbnails || {}).length,
+        });
+      }
 
       return {
         id: docSnap.id,
@@ -701,11 +763,11 @@ export const getEntriesInRange = async (
         const data = docSnap.data();
         const isEncrypted = data._encrypted === true;
 
-        const title = isEncrypted ? decryptText(data.title) : data.title;
-        const content = isEncrypted ? decryptText(data.content) : data.content;
+        const title = isEncrypted ? safeDecryptText(data.title) : data.title;
+        const content = isEncrypted ? safeDecryptText(data.content) : data.content;
         const address = data.location?.address
           ? isEncrypted
-            ? decryptText(data.location.address)
+            ? safeDecryptText(data.location.address)
             : data.location.address
           : undefined;
 

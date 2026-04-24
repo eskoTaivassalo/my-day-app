@@ -32,6 +32,7 @@ export default function NewEntryScreen({ navigation }: any) {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [selectedVideos, setSelectedVideos] = useState<string[]>([]);
   const [selectedVideoThumbnails, setSelectedVideoThumbnails] = useState<Record<string, string>>({});
+  const [isPreparingVideos, setIsPreparingVideos] = useState(false);
   const [layout, setLayout] = useState<LayoutType>('grid');
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -43,6 +44,21 @@ export default function NewEntryScreen({ navigation }: any) {
   const isDark = theme.id === 'midnight';
   const locale = getLocaleFromLanguage(language);
   const skipDiscardPromptRef = useRef(false);
+  const selectedVideosRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    selectedVideosRef.current = selectedVideos;
+  }, [selectedVideos]);
+
+  const appendSelectedVideos = (newVideos: string[]) => {
+    if (newVideos.length === 0) {
+      return;
+    }
+
+    const mergedVideos = [...selectedVideosRef.current, ...newVideos];
+    selectedVideosRef.current = mergedVideos;
+    setSelectedVideos(mergedVideos);
+  };
 
   const hasDraftChanges = () => {
     return (
@@ -229,17 +245,22 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const pickVideoFromGallery = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'videos',
-      allowsMultipleSelection: true,
-      selectionLimit: 0,
-      quality: 1,
-    });
+    setIsPreparingVideos(true);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'videos',
+        allowsMultipleSelection: true,
+        selectionLimit: 0,
+        quality: 1,
+      });
 
-    if (!result.canceled && result.assets) {
-      const newVideos = result.assets.map((asset) => asset.uri);
-      setSelectedVideos((prev) => [...prev, ...newVideos]);
-      void resolveVideoThumbnailsForUris(newVideos);
+      if (!result.canceled && result.assets) {
+        const newVideos = result.assets.map((asset) => asset.uri);
+        appendSelectedVideos(newVideos);
+        await resolveVideoThumbnailsForUris(newVideos);
+      }
+    } finally {
+      setIsPreparingVideos(false);
     }
   };
 
@@ -251,15 +272,21 @@ export default function NewEntryScreen({ navigation }: any) {
       return;
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: 'videos',
-      quality: 1,
-      videoMaxDuration: 120,
-    });
+    setIsPreparingVideos(true);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: 'videos',
+        quality: 1,
+        videoMaxDuration: 120,
+      });
 
-    if (!result.canceled && result.assets) {
-      setSelectedVideos((prev) => [...prev, result.assets[0].uri]);
-      void resolveVideoThumbnailsForUris([result.assets[0].uri]);
+      if (!result.canceled && result.assets) {
+        const recordedUri = result.assets[0].uri;
+        appendSelectedVideos([recordedUri]);
+        await resolveVideoThumbnailsForUris([recordedUri]);
+      }
+    } finally {
+      setIsPreparingVideos(false);
     }
   };
 
@@ -403,6 +430,13 @@ export default function NewEntryScreen({ navigation }: any) {
       return;
     }
 
+    if (isPreparingVideos) {
+      Alert.alert(t('common_error'), t('entry_uploading'));
+      return;
+    }
+
+    const videosToUpload = selectedVideosRef.current;
+
     setSaving(true);
     try {
       // Upload images to Firebase Storage if any
@@ -414,22 +448,30 @@ export default function NewEntryScreen({ navigation }: any) {
       // Upload videos to Firebase Storage if any
       let videoUrls: string[] = [];
       let videoThumbnails: Record<string, string> = {};
-      if (selectedVideos.length > 0) {
+      if (videosToUpload.length > 0) {
         setUploadProgress(0);
-        const videoAssets = await uploadVideos(selectedVideos, user.uid, (progress) => {
-          setUploadProgress(progress);
-        });
-        videoUrls = videoAssets.map((asset) => asset.videoUrl);
-        videoThumbnails = videoAssets.reduce((acc, asset) => {
-          if (asset.thumbnailUrl) {
-            acc[asset.videoUrl] = asset.thumbnailUrl;
-          }
-          return acc;
-        }, {} as Record<string, string>);
-        setUploadProgress(null);
+        try {
+          const videoAssets = await uploadVideos(videosToUpload, user.uid, (progress) => {
+            setUploadProgress(progress);
+          });
+          videoUrls = videoAssets.map((asset) => asset.videoUrl);
+          videoThumbnails = videoAssets.reduce((acc, asset) => {
+            if (asset.thumbnailUrl) {
+              acc[asset.videoUrl] = asset.thumbnailUrl;
+            }
+            return acc;
+          }, {} as Record<string, string>);
+          console.log('Video upload complete. Count:', videoUrls.length, 'URLs:', videoUrls);
+        } catch (videoError) {
+          console.error('Video upload failed:', videoError);
+          throw new Error(`Videoiden lataus epäonnistui: ${videoError}`);
+        } finally {
+          setUploadProgress(null);
+        }
       }
 
       // Save entry to Firestore with selected date
+      console.log('Creating entry with videos:', videoUrls.length);
       await createEntry(
         {
           title: title.trim(),
@@ -458,8 +500,9 @@ export default function NewEntryScreen({ navigation }: any) {
           },
         ]
       );
-    } catch {
-      Alert.alert(t('common_error'), t('new_entry_save_failed'));
+    } catch (error) {
+      console.error('Entry save error:', error);
+      Alert.alert(t('common_error'), error instanceof Error ? error.message : t('new_entry_save_failed'));
     } finally {
       setSaving(false);
     }
@@ -475,11 +518,11 @@ export default function NewEntryScreen({ navigation }: any) {
           <Text style={[styles.cancelButton, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('common_cancel')}</Text>
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('new_entry_header')}</Text>
-        <TouchableOpacity onPress={handleSave} disabled={saving}>
-          <Text style={[styles.saveButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }, saving && styles.saveButtonDisabled]}>
+        <TouchableOpacity onPress={handleSave} disabled={saving || isPreparingVideos}>
+          <Text style={[styles.saveButton, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }, (saving || isPreparingVideos) && styles.saveButtonDisabled]}>
             {uploadProgress !== null
               ? t('new_entry_loading', { progress: uploadProgress })
-              : saving ? t('common_saving') : t('common_save')}
+              : saving ? t('common_saving') : isPreparingVideos ? t('entry_uploading') : t('common_save')}
           </Text>
         </TouchableOpacity>
       </View>
@@ -583,11 +626,11 @@ export default function NewEntryScreen({ navigation }: any) {
               <Text style={styles.compactButtonIcon}>🖼️</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={recordVideo}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={recordVideo} disabled={saving || isPreparingVideos}>
               <Text style={styles.compactButtonIcon}>🎥</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={pickVideoFromGallery}>
+            <TouchableOpacity style={[styles.compactButton, { backgroundColor: isDark ? '#1E293B' : '#f0f0f0' }]} onPress={pickVideoFromGallery} disabled={saving || isPreparingVideos}>
               <Text style={styles.compactButtonIcon}>📼</Text>
             </TouchableOpacity>
           </View>

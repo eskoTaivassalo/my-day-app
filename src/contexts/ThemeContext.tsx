@@ -74,8 +74,8 @@ const defaultColors: ThemeColors = {
 };
 
 const defaultFonts: ThemeFonts = {
-  headingFamily: scriptFontFamily,
-  bodyFamily: scriptFontFamily,
+  headingFamily: undefined,
+  bodyFamily: undefined,
 };
 
 const themePresets: AppTheme[] = [

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Platform } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Platform, Modal, TextInput } from 'react-native';
 import { useLanguage } from '../contexts/LanguageContext';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -25,7 +25,24 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getEntries,
 } from '../services/diaryService';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, ThemeColors } from '../contexts/ThemeContext';
+import { useAppLock } from '../contexts/AppLockContext';
+
+const CUSTOM_STUDIO_COLOR_FIELDS: Array<{ key: keyof ThemeColors; label: string }> = [
+  { key: 'primary', label: 'Paavari (painikkeet)' },
+  { key: 'primaryLight', label: 'Paavari vaalea' },
+  { key: 'primaryDark', label: 'Paavari tumma' },
+  { key: 'secondary', label: 'Toissijainen vari' },
+  { key: 'accent', label: 'Kuvakkeet / kuva-aksentti' },
+  { key: 'text', label: 'Teksti paa' },
+  { key: 'textSecondary', label: 'Teksti toissijainen' },
+  { key: 'background', label: 'Tausta paa' },
+  { key: 'backgroundLight', label: 'Tausta vaalea' },
+  { key: 'border', label: 'Reunaviiva' },
+  { key: 'white', label: 'Kortit / valkoinen pinta' },
+];
+
+const RGB_STEPS = [0, 51, 102, 153, 204, 255];
 
 export default function SettingsScreen({ navigation }: any) {
   const { user } = useAuth();
@@ -38,7 +55,6 @@ export default function SettingsScreen({ navigation }: any) {
     customThemeDraft,
     updateCustomColors,
     setCustomFontOption,
-    colorOptions,
     fontOptions,
   } = useTheme();
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
@@ -53,11 +69,47 @@ export default function SettingsScreen({ navigation }: any) {
   const [calendarList, setCalendarList] = useState<Calendar.Calendar[]>([]);
   const [selectedCalendarId, setSelectedCalendarIdState] = useState<string | null>(null);
 
+  const { pinEnabled, biometricsEnabled, biometricsAvailable, enablePin, disablePin, enableBiometrics } = useAppLock();
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinStep, setPinStep] = useState<'enter' | 'confirm'>('enter');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [savingPin, setSavingPin] = useState(false);
+  const [selectedCustomColorKey, setSelectedCustomColorKey] = useState<keyof ThemeColors>('primary');
+  const pinInputRef = useRef<TextInput>(null);
+
   useEffect(() => {
     loadNotificationSettings();
     loadReminderSettings();
     loadCalendarSettings();
   }, [user]);
+
+  const clampRgb = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
+
+  const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+    const clean = hex.replace('#', '');
+    if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
+      return { r: 0, g: 0, b: 0 };
+    }
+
+    return {
+      r: parseInt(clean.slice(0, 2), 16),
+      g: parseInt(clean.slice(2, 4), 16),
+      b: parseInt(clean.slice(4, 6), 16),
+    };
+  };
+
+  const rgbToHex = ({ r, g, b }: { r: number; g: number; b: number }): string => {
+    const toHex = (n: number) => clampRgb(n).toString(16).padStart(2, '0').toUpperCase();
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  };
+
+  const updateRgbChannel = (channel: 'r' | 'g' | 'b', value: number) => {
+    const currentHex = customThemeDraft.colors[selectedCustomColorKey] || '#000000';
+    const currentRgb = hexToRgb(currentHex);
+    const nextRgb = { ...currentRgb, [channel]: clampRgb(value) };
+    void updateCustomColors({ [selectedCustomColorKey]: rgbToHex(nextRgb) } as Partial<ThemeColors>);
+  };
 
   const loadNotificationSettings = async () => {
     try {
@@ -150,6 +202,60 @@ export default function SettingsScreen({ navigation }: any) {
 
     if (newSettings.enabled) {
       await scheduleDailyReminders(newSettings);
+    }
+  };
+
+  const handleTogglePin = () => {
+    if (pinEnabled) {
+      Alert.alert(
+        t('settings_lock_disable_title'),
+        t('settings_lock_disable_msg'),
+        [
+          { text: t('common_cancel'), style: 'cancel' },
+          { text: t('common_yes'), style: 'destructive', onPress: async () => { await disablePin(); } },
+        ]
+      );
+    } else {
+      setPinStep('enter');
+      setNewPin('');
+      setConfirmPin('');
+      setShowPinModal(true);
+      setTimeout(() => pinInputRef.current?.focus(), 300);
+    }
+  };
+
+  const handlePinModalConfirm = async () => {
+    if (savingPin) return;
+
+    if (pinStep === 'enter') {
+      if (newPin.length !== 6) {
+        Alert.alert(t('common_error'), t('settings_lock_pin_length'));
+        return;
+      }
+      setPinStep('confirm');
+      setConfirmPin('');
+      setTimeout(() => pinInputRef.current?.focus(), 100);
+    } else {
+      if (confirmPin !== newPin) {
+        Alert.alert(t('common_error'), t('settings_lock_pin_mismatch'));
+        setConfirmPin('');
+        return;
+      }
+
+      try {
+        setSavingPin(true);
+        await enablePin(newPin);
+        setShowPinModal(false);
+        setPinStep('enter');
+        setNewPin('');
+        setConfirmPin('');
+        Alert.alert(t('settings_lock_enabled_title'), t('settings_lock_enabled_msg'));
+      } catch (error) {
+        console.error('PIN setup failed:', error);
+        Alert.alert(t('common_error'), t('settings_lock_save_failed'));
+      } finally {
+        setSavingPin(false);
+      }
     }
   };
 
@@ -359,46 +465,85 @@ export default function SettingsScreen({ navigation }: any) {
 
           {activeThemeId === 'custom' && (
             <View style={styles.customThemePanel}>
-              <Text style={[styles.customThemeLabel, { color: theme.colors.text }]}>Paa väri</Text>
-              <View style={styles.colorOptionRow}>
-                {colorOptions.slice(0, 8).map((option) => (
-                  <TouchableOpacity
-                    key={`primary-${option.value}`}
-                    style={[
-                      styles.colorOption,
-                      { backgroundColor: option.value },
-                      customThemeDraft.colors.primary === option.value && styles.colorOptionActive,
-                    ]}
-                    onPress={() =>
-                      updateCustomColors({
-                        primary: option.value,
-                        primaryLight: option.value,
-                        primaryDark: option.value,
-                      })
-                    }
-                  />
-                ))}
-              </View>
+              <Text style={[styles.customThemeLabel, { color: theme.colors.text }]}>Koko varipaletti (RGB)</Text>
+              {CUSTOM_STUDIO_COLOR_FIELDS.map((field) => {
+                const value = customThemeDraft.colors[field.key] || '#000000';
+                const rgb = hexToRgb(value);
+                const isSelected = selectedCustomColorKey === field.key;
 
-              <Text style={[styles.customThemeLabel, { color: theme.colors.text }]}>Tausta</Text>
-              <View style={styles.colorOptionRow}>
-                {colorOptions.slice(7).map((option) => (
+                return (
                   <TouchableOpacity
-                    key={`bg-${option.value}`}
+                    key={field.key}
                     style={[
-                      styles.colorOption,
-                      { backgroundColor: option.value },
-                      customThemeDraft.colors.background === option.value && styles.colorOptionActive,
+                      styles.customColorRow,
+                      isSelected && { borderColor: theme.colors.primary, backgroundColor: theme.colors.backgroundLight },
                     ]}
-                    onPress={() =>
-                      updateCustomColors({
-                        background: option.value,
-                        backgroundLight: option.value,
-                        white: option.value,
-                      })
-                    }
-                  />
-                ))}
+                    activeOpacity={0.8}
+                    onPress={() => setSelectedCustomColorKey(field.key)}
+                  >
+                    <View style={styles.customColorMeta}>
+                      <View
+                        style={[
+                          styles.customColorPreview,
+                          {
+                            backgroundColor: value,
+                            borderColor: theme.colors.border,
+                          },
+                        ]}
+                      />
+                      <Text style={[styles.customColorLabel, { color: theme.colors.text }]}>{field.label}</Text>
+                    </View>
+                    <Text style={[styles.customColorRgbText, { color: theme.colors.textSecondary }]}>
+                      rgb({rgb.r}, {rgb.g}, {rgb.b})
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+
+              <View style={[styles.rgbPickerPanel, { borderColor: theme.colors.border, backgroundColor: theme.colors.backgroundLight }]}>
+                <Text style={[styles.customThemeLabel, { color: theme.colors.text, marginTop: 0 }]}>RGB-valitsin</Text>
+                <Text style={[styles.rgbSelectedLabel, { color: theme.colors.textSecondary }]}>
+                  {CUSTOM_STUDIO_COLOR_FIELDS.find((f) => f.key === selectedCustomColorKey)?.label}
+                </Text>
+
+                {(['r', 'g', 'b'] as const).map((channel) => {
+                  const currentHex = customThemeDraft.colors[selectedCustomColorKey] || '#000000';
+                  const currentRgb = hexToRgb(currentHex);
+                  const currentValue = currentRgb[channel];
+                  const channelLabel = channel.toUpperCase();
+
+                  return (
+                    <View key={channel} style={styles.rgbChannelBlock}>
+                      <Text style={[styles.rgbChannelTitle, { color: theme.colors.text }]}>Kanal {channelLabel}: {currentValue}</Text>
+                      <View style={styles.rgbSwatchRow}>
+                        {RGB_STEPS.map((step) => {
+                          const previewRgb = {
+                            ...currentRgb,
+                            [channel]: step,
+                          };
+                          const previewHex = rgbToHex(previewRgb);
+                          const isActive = currentValue === step;
+
+                          return (
+                            <TouchableOpacity
+                              key={`${channel}-${step}`}
+                              style={[
+                                styles.rgbSwatch,
+                                {
+                                  backgroundColor: previewHex,
+                                  borderColor: isActive ? theme.colors.primary : theme.colors.border,
+                                  borderWidth: isActive ? 2 : 1,
+                                },
+                              ]}
+                              onPress={() => updateRgbChannel(channel, step)}
+                              activeOpacity={0.85}
+                            />
+                          );
+                        })}
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
 
               <Text style={[styles.customThemeLabel, { color: theme.colors.text }]}>Tekstifontti</Text>
@@ -416,6 +561,49 @@ export default function SettingsScreen({ navigation }: any) {
                   </TouchableOpacity>
                 ))}
               </View>
+            </View>
+          )}
+        </View>
+
+        {/* App Lock */}
+        <View style={[styles.card, { backgroundColor: theme.colors.background }]}>
+          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>{t('settings_lock_section')}</Text>
+
+          <View style={styles.settingRow}>
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingIcon}>🔒</Text>
+              <View>
+                <Text style={[styles.settingTitle, { color: theme.colors.text }]}>{t('settings_lock_pin')}</Text>
+                <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>
+                  {t('settings_lock_pin_desc')}
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={pinEnabled}
+              onValueChange={handleTogglePin}
+              trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+              thumbColor={theme.colors.white}
+            />
+          </View>
+
+          {pinEnabled && biometricsAvailable && (
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingIcon}>👆</Text>
+                <View>
+                  <Text style={[styles.settingTitle, { color: theme.colors.text }]}>{t('settings_lock_biometrics')}</Text>
+                  <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>
+                    {t('settings_lock_biometrics_desc')}
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={biometricsEnabled}
+                onValueChange={enableBiometrics}
+                trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                thumbColor={theme.colors.white}
+              />
             </View>
           )}
         </View>
@@ -456,6 +644,75 @@ export default function SettingsScreen({ navigation }: any) {
           onChange={onChangeTime}
         />
       )}
+
+      {/* PIN setup modal */}
+      <Modal visible={showPinModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: theme.colors.background }]}>
+            <Text style={[styles.modalTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>
+              {pinStep === 'enter' ? t('settings_lock_pin_enter') : t('settings_lock_pin_confirm')}
+            </Text>
+            <Text style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}>
+              {t('settings_lock_pin_length_hint')}
+            </Text>
+            <TextInput
+              ref={pinInputRef}
+              style={[styles.pinInput, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: theme.colors.backgroundLight }]}
+              value={pinStep === 'enter' ? newPin : confirmPin}
+              onChangeText={(v) => {
+                const digits = v.replace(/[^0-9]/g, '').slice(0, 6);
+
+                if (pinStep === 'enter') {
+                  setNewPin(digits);
+                  if (digits.length === 6) {
+                    setTimeout(() => {
+                      setPinStep('confirm');
+                      setConfirmPin('');
+                      setTimeout(() => pinInputRef.current?.focus(), 60);
+                    }, 80);
+                  }
+                } else {
+                  setConfirmPin(digits);
+                }
+              }}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={6}
+              placeholder="••••••"
+              placeholderTextColor={theme.colors.textSecondary}
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => {
+                  if (savingPin) return;
+                  setShowPinModal(false);
+                  setPinStep('enter');
+                  setNewPin('');
+                  setConfirmPin('');
+                }}
+              >
+                <Text style={[styles.modalCancelText, { color: theme.colors.textSecondary }]}>{t('common_cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalConfirmBtn,
+                  {
+                    backgroundColor: theme.colors.primary,
+                    opacity: (pinStep === 'enter' ? newPin.length === 6 : confirmPin.length === 6) && !savingPin ? 1 : 0.6,
+                  },
+                ]}
+                disabled={savingPin || (pinStep === 'enter' ? newPin.length !== 6 : confirmPin.length !== 6)}
+                onPress={handlePinModalConfirm}
+              >
+                <Text style={styles.modalConfirmText}>
+                  {savingPin ? t('common_saving') : pinStep === 'enter' ? t('common_continue') : t('common_save')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -688,6 +945,67 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginTop: spacing.xs,
   },
+  customColorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.gray200,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  customColorMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.sm,
+  },
+  customColorPreview: {
+    width: 20,
+    height: 20,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  customColorLabel: {
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.medium,
+    color: colors.text,
+    flex: 1,
+  },
+  customColorRgbText: {
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  rgbPickerPanel: {
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    padding: spacing.sm,
+    gap: spacing.sm,
+  },
+  rgbSelectedLabel: {
+    fontSize: typography.fontSizes.xs,
+    color: colors.textSecondary,
+  },
+  rgbChannelBlock: {
+    gap: spacing.xs,
+  },
+  rgbChannelTitle: {
+    fontSize: typography.fontSizes.sm,
+    fontWeight: typography.fontWeights.semibold,
+    color: colors.text,
+  },
+  rgbSwatchRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  rgbSwatch: {
+    width: 28,
+    height: 28,
+    borderRadius: borderRadius.md,
+  },
   colorOptionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -723,5 +1041,60 @@ const styles = StyleSheet.create({
   fontOptionText: {
     fontSize: typography.fontSizes.sm,
     color: colors.text,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
+  modalCard: {
+    width: '100%',
+    borderRadius: borderRadius.xl,
+    padding: spacing.xl,
+    gap: spacing.md,
+  },
+  modalTitle: {
+    fontSize: typography.fontSizes.xl,
+    fontWeight: typography.fontWeights.bold,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: typography.fontSizes.sm,
+    textAlign: 'center',
+  },
+  pinInput: {
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    fontSize: 24,
+    textAlign: 'center',
+    letterSpacing: 8,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
+  },
+  modalConfirmBtn: {
+    flex: 1,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+  },
+  modalConfirmText: {
+    color: colors.white,
+    fontSize: typography.fontSizes.md,
+    fontWeight: typography.fontWeights.semibold,
   },
 });

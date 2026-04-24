@@ -37,6 +37,8 @@ import ImageLibraryScreen from './src/screens/ImageLibraryScreen';
 import VideoLibraryScreen from './src/screens/VideoLibraryScreen';
 import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
 import EncryptionPassphraseScreen from './src/screens/EncryptionPassphraseScreen';
+import AppLockScreen from './src/screens/AppLockScreen';
+import { AppLockProvider, useAppLock } from './src/contexts/AppLockContext';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -246,7 +248,16 @@ function RootNavigator() {
     return <EncryptionPassphraseScreen />;
   }
 
-  return user ? <AppNavigator /> : <AuthNavigator />;
+  if (!user) return <AuthNavigator />;
+
+  return <AppWithLock />;
+}
+
+// Authenticated wrapper that shows app lock if needed
+function AppWithLock() {
+  const { isLocked } = useAppLock();
+  if (isLocked) return <AppLockScreen />;
+  return <AppNavigator />;
 }
 
 // Main App component
@@ -255,10 +266,12 @@ export default function App() {
     <LanguageProvider>
       <ThemeProvider>
         <AuthProvider>
-          <NavigationContainer>
-            <StatusBar style="auto" />
-            <RootNavigator />
-          </NavigationContainer>
+          <AppLockProvider>
+            <NavigationContainer>
+              <StatusBar style="auto" />
+              <RootNavigator />
+            </NavigationContainer>
+          </AppLockProvider>
         </AuthProvider>
       </ThemeProvider>
     </LanguageProvider>

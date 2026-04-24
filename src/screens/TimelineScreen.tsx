@@ -293,8 +293,8 @@ export default function TimelineScreen({ navigation }: any) {
         };
       case 2:
         return {
-          fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
-          fontStyle: 'italic' as const,
+          fontFamily: theme.fonts.bodyFamily,
+          fontStyle: 'normal' as const,
           letterSpacing: 0.4,
           color: greetingPalette.accentColor,
         };
