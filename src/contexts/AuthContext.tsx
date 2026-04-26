@@ -35,6 +35,7 @@ const AUTH_USER_KEY = '@my_day_auth_user';
 
 // Lippu joka estää onAuthStateChanged:ia häiritsemästä aktiivista kirjautumista
 let _activeSignInInProgress = false;
+let _lastEmailSignInPassword: string | null = null;
 
 export type EncryptionStatus = 'loading' | 'ready' | 'needs_setup' | 'needs_passphrase';
 
@@ -83,7 +84,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isMounted) return;
       
       setUser(firebaseUser);
-      setLoading(false);
 
       // Save/remove user in AsyncStorage
       try {
@@ -104,7 +104,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (firebaseUser) {
         // Jos aktiivinen kirjautuminen on käynnissä (signIn/signUp/Google),
         // se hoitaa salausavaimen lataamisen — ei tehdä tässä päällekkäin
-        if (_activeSignInInProgress) return;
+        if (_activeSignInInProgress) {
+          setLoading(false);
+          return;
+        }
 
         // Sovelluksen uudelleenkäynnistys: yritä ladata avain laitteesta
         try {
@@ -112,9 +115,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (loaded) {
             setEncryptionStatus('ready');
           } else {
-            // Uusi laite tai SecureStore tyhjennetty.
-            // Aseta tila heti, jotta UI ei odota verkkoa käynnistyspolulla.
-            setEncryptionStatus('needs_passphrase');
+            // Sähköpostikirjautumisella yritetään avata avain viimeisimmällä
+            // onnistuneella kirjautumissalasanalla automaattisesti.
+            const providerId = firebaseUser.providerData?.[0]?.providerId;
+            if (providerId === 'password' && _lastEmailSignInPassword) {
+              const loadResult = await loadEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
+              if (loadResult === 'ready') {
+                setEncryptionStatus('ready');
+              } else if (loadResult === 'setup_needed') {
+                await setupNewEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
+                setEncryptionStatus('ready');
+              } else {
+                // Varmista, että email-käyttäjällä avain sidotaan aina
+                // nykyiseen kirjautumissalasanaan.
+                await setupNewEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
+                setEncryptionStatus('ready');
+              }
+            } else {
+              // Uusi laite tai SecureStore tyhjennetty.
+              // Aseta tila heti, jotta UI ei odota verkkoa käynnistyspolulla.
+              setEncryptionStatus('needs_passphrase');
+            }
 
             // Tarkennetaan taustalla onko kyseessä setup-vaihe.
             void getDoc(doc(db, 'users', firebaseUser.uid))
@@ -129,6 +150,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         } catch (error) {
           setEncryptionStatus('needs_passphrase');
+        } finally {
+          setLoading(false);
         }
 
         try {
@@ -146,7 +169,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
           }
         } catch (error) {
+        } finally {
+          setLoading(false);
         }
+      } else {
+        _lastEmailSignInPassword = null;
+        setLoading(false);
       }
     });
 
@@ -158,7 +186,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
+      setLoading(true);
       _activeSignInInProgress = true;
+      _lastEmailSignInPassword = password;
       const cred = await signInWithEmailAndPassword(auth, email, password);
 
       // Fast-path: jos avain löytyy laitteelta, älä tee verkko+PBKDF2-kierrosta.
@@ -174,8 +204,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Uusi käyttäjä tai migraatio vanhasta versiosta
         await setupNewEncryptionKey(cred.user.uid, password);
       } else if (result === 'wrong_passphrase') {
-        // Ei pitäisi tapahtua jos sähköpostikirjautuminen onnistui samalla salasanalla
-        setEncryptionStatus('needs_passphrase');
+        // Kohdista salausavaimen kapselointi kirjautumissalasanaan,
+        // jotta kirjautumisen jälkeen avain on aina käytettävissä.
+        await setupNewEncryptionKey(cred.user.uid, password);
       }
       if (getEncryptionStatus().isReady) {
         setEncryptionStatus('ready');
@@ -184,12 +215,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
+      setLoading(false);
     }
   };
 
   const signUp = async (email: string, password: string) => {
     try {
+      setLoading(true);
       _activeSignInInProgress = true;
+      _lastEmailSignInPassword = password;
       const credential = await createUserWithEmailAndPassword(auth, email, password);
       // Luo users-dokumentti Firestoreen heti rekisteröinnin yhteydessä
       await setDoc(doc(db, 'users', credential.user.uid), {
@@ -208,11 +242,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
+      setLoading(false);
     }
   };
 
   const signInWithGoogle = async () => {
     try {
+      setLoading(true);
       const clientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
       if (!clientId) {
         throw new Error('Google Web Client ID not configured');
@@ -270,6 +306,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
+      setLoading(false);
     }
   };
 
@@ -344,6 +381,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try {
       clearEncryptionKey();
+      _lastEmailSignInPassword = null;
       setEncryptionStatus('loading');
       await signOut(auth);
     } catch (error: any) {

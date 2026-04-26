@@ -36,9 +36,7 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import ImageLibraryScreen from './src/screens/ImageLibraryScreen';
 import VideoLibraryScreen from './src/screens/VideoLibraryScreen';
 import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
-import EncryptionPassphraseScreen from './src/screens/EncryptionPassphraseScreen';
-import AppLockScreen from './src/screens/AppLockScreen';
-import { AppLockProvider, useAppLock } from './src/contexts/AppLockContext';
+import { AppLockProvider } from './src/contexts/AppLockContext';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -206,7 +204,7 @@ function AppNavigator() {
 
 // Root navigator with auth check
 function RootNavigator() {
-  const { user, loading, encryptionStatus } = useAuth();
+  const { user, loading } = useAuth();
   const { t } = useLanguage();
   const { theme } = useTheme();
   const notificationListener = useRef<Notifications.Subscription | null>(null);
@@ -245,20 +243,8 @@ function RootNavigator() {
     );
   }
 
-  // Salauksen asetus tai avaus vaaditaan ennen kuin sovellus on käytettävissä
-  if (user && (encryptionStatus === 'needs_setup' || encryptionStatus === 'needs_passphrase')) {
-    return <EncryptionPassphraseScreen />;
-  }
-
   if (!user) return <AuthNavigator />;
 
-  return <AppWithLock />;
-}
-
-// Authenticated wrapper that shows app lock if needed
-function AppWithLock() {
-  const { isLocked } = useAppLock();
-  if (isLocked) return <AppLockScreen />;
   return <AppNavigator />;
 }
 

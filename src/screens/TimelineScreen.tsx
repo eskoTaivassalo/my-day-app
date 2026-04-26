@@ -191,7 +191,7 @@ export default function TimelineScreen({ navigation }: any) {
   const [showGreetingCard, setShowGreetingCard] = useState(true);
   const [greetingVariantIndex, setGreetingVariantIndex] = useState(0);
   const [videoThumbnailMap, setVideoThumbnailMap] = useState<Record<string, string>>({});
-  const { user, encryptionStatus } = useAuth();
+  const { user } = useAuth();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
   const locale = getLocaleFromLanguage(language);
@@ -437,7 +437,7 @@ export default function TimelineScreen({ navigation }: any) {
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     React.useCallback(() => {
-      if (!user || encryptionStatus !== 'ready') {
+      if (!user) {
         return;
       }
 
@@ -464,7 +464,7 @@ export default function TimelineScreen({ navigation }: any) {
       return () => {
         task.cancel();
       };
-    }, [user, encryptionStatus, entries.length])
+    }, [user, entries.length])
   );
 
   const loadUnlockedAchievements = async (): Promise<number[]> => {
@@ -494,7 +494,7 @@ export default function TimelineScreen({ navigation }: any) {
   };
 
   const loadEntries = async (unlockedIds?: number[], options?: { showLoading?: boolean }) => {
-    if (!user || encryptionStatus !== 'ready') return;
+    if (!user) return;
 
     // Estä päällekkäiset lataukset (esim. focus + strict mode -tuplakutsu)
     if (entriesLoadInFlightRef.current) {

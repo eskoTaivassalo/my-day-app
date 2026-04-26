@@ -12,9 +12,16 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { getCachedUnlockedAchievementIds, getUnlockedAchievementIds } from '../services/achievementStorageService';
+import {
+  addUnlockedAchievement,
+  getCachedUnlockedAchievementIds,
+  getUnlockedAchievementIds,
+} from '../services/achievementStorageService';
+import { getEntriesFast } from '../services/diaryService';
 import {
   achievements,
+  calculateStats,
+  getUnlockedAchievements,
   getLocalizedAchievement,
   Achievement,
 } from '../utils/achievementUtils';
@@ -29,6 +36,32 @@ export default function AchievementsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [displayedUnlockedCount, setDisplayedUnlockedCount] = useState(0);
   const loadRequestIdRef = useRef(0);
+  const hasReconciledFromStatsRef = useRef(false);
+
+  useEffect(() => {
+    hasReconciledFromStatsRef.current = false;
+  }, [user?.uid]);
+
+  const reconcileFromStats = useCallback(async (persistedIds: number[]) => {
+    if (!user || hasReconciledFromStatsRef.current) return;
+
+    hasReconciledFromStatsRef.current = true;
+
+    try {
+      const allEntries = await getEntriesFast(user.uid);
+      const stats = calculateStats(allEntries);
+      const idsFromStats = getUnlockedAchievements(stats).map((achievement) => achievement.id);
+      const missingIds = idsFromStats.filter((id) => !persistedIds.includes(id));
+
+      if (missingIds.length > 0) {
+        void Promise.all(missingIds.map((id) => addUnlockedAchievement(user.uid, id))).catch(() => undefined);
+      }
+
+      setUnlockedIds((prev) => Array.from(new Set([...prev, ...idsFromStats])));
+    } catch {
+      hasReconciledFromStatsRef.current = false;
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -53,6 +86,7 @@ export default function AchievementsScreen({ navigation }: any) {
       const ids = await getUnlockedAchievementIds(user.uid);
       if (requestId === loadRequestIdRef.current) {
         setUnlockedIds(ids);
+        void reconcileFromStats(ids);
       }
     } catch {
       if (requestId === loadRequestIdRef.current) {
@@ -63,7 +97,7 @@ export default function AchievementsScreen({ navigation }: any) {
         setLoading(false);
       }
     }
-  }, [user]);
+  }, [reconcileFromStats, user]);
 
   useFocusEffect(
     useCallback(() => {
