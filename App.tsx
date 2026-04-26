@@ -52,6 +52,8 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        lazy: true,
+        freezeOnBlur: true,
         tabBarStyle: {
           height: 90,
           paddingBottom: 30,

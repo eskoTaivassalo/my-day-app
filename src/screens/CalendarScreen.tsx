@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
+  ActivityIndicator,
+  InteractionManager,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { DiaryEntry } from '../types/DiaryEntry';
@@ -14,7 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
-import { getEntries } from '../services/diaryService';
+import { getEntriesFast } from '../services/diaryService';
 import { getDocuments } from '../services/documentService';
 
 interface CalendarDay {
@@ -22,8 +24,6 @@ interface CalendarDay {
   isCurrentMonth: boolean;
   hasEntry: boolean;
   hasDocument: boolean;
-  entries: DiaryEntry[];
-  documents: Document[];
 }
 
 export default function CalendarScreen({ navigation }: any) {
@@ -37,31 +37,75 @@ export default function CalendarScreen({ navigation }: any) {
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [loading, setLoading] = useState(true);
+  const loadRequestIdRef = useRef(0);
+  const loadInFlightRef = useRef(false);
 
   const loadEntries = useCallback(async () => {
     if (!user) return;
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    const requestId = ++loadRequestIdRef.current;
     
     try {
+      setLoading(true);
       const [fetchedEntries, fetchedDocuments] = await Promise.all([
-        getEntries(user.uid),
+        getEntriesFast(user.uid),
         getDocuments(user.uid),
       ]);
-      setEntries(fetchedEntries);
-      setDocuments(fetchedDocuments);
+      if (requestId === loadRequestIdRef.current) {
+        setEntries(fetchedEntries);
+        setDocuments(fetchedDocuments);
+      }
     } catch {
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
+      loadInFlightRef.current = false;
     }
   }, [user]);
-
-  useEffect(() => {
-    void loadEntries();
-  }, [loadEntries]);
 
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     useCallback(() => {
-      void loadEntries();
+      const task = InteractionManager.runAfterInteractions(() => {
+        void loadEntries();
+      });
+
+      return () => {
+        task.cancel();
+      };
     }, [loadEntries])
   );
+
+  const entriesByDate = useMemo(() => {
+    const map = new Map<string, DiaryEntry[]>();
+    entries.forEach((entry) => {
+      const dateKey = new Date(entry.date).toISOString().slice(0, 10);
+      const current = map.get(dateKey);
+      if (current) {
+        current.push(entry);
+      } else {
+        map.set(dateKey, [entry]);
+      }
+    });
+    return map;
+  }, [entries]);
+
+  const documentsByDate = useMemo(() => {
+    const map = new Map<string, Document[]>();
+    documents.forEach((doc) => {
+      const dateKey = new Date(doc.date).toISOString().slice(0, 10);
+      const current = map.get(dateKey);
+      if (current) {
+        current.push(doc);
+      } else {
+        map.set(dateKey, [doc]);
+      }
+    });
+    return map;
+  }, [documents]);
 
   useEffect(() => {
     generateCalendar();
@@ -93,8 +137,6 @@ export default function CalendarScreen({ navigation }: any) {
         isCurrentMonth: false,
         hasEntry: hasEntryOnDate(date),
         hasDocument: hasDocumentOnDate(date),
-        entries: getEntriesForDate(date),
-        documents: getDocumentsForDate(date),
       });
     }
 
@@ -106,8 +148,6 @@ export default function CalendarScreen({ navigation }: any) {
         isCurrentMonth: true,
         hasEntry: hasEntryOnDate(date),
         hasDocument: hasDocumentOnDate(date),
-        entries: getEntriesForDate(date),
-        documents: getDocumentsForDate(date),
       });
     }
 
@@ -120,8 +160,6 @@ export default function CalendarScreen({ navigation }: any) {
         isCurrentMonth: false,
         hasEntry: hasEntryOnDate(date),
         hasDocument: hasDocumentOnDate(date),
-        entries: getEntriesForDate(date),
-        documents: getDocumentsForDate(date),
       });
     }
 
@@ -129,19 +167,21 @@ export default function CalendarScreen({ navigation }: any) {
   };
 
   const hasEntryOnDate = (date: Date): boolean => {
-    return entries.some((entry) => isSameDay(new Date(entry.date), date));
+    return getEntriesForDate(date).length > 0;
   };
 
   const getEntriesForDate = (date: Date): DiaryEntry[] => {
-    return entries.filter((entry) => isSameDay(new Date(entry.date), date));
+    const dateKey = new Date(date).toISOString().slice(0, 10);
+    return entriesByDate.get(dateKey) || [];
   };
 
   const hasDocumentOnDate = (date: Date): boolean => {
-    return documents.some((doc) => isSameDay(new Date(doc.date), date));
+    return getDocumentsForDate(date).length > 0;
   };
 
   const getDocumentsForDate = (date: Date): Document[] => {
-    return documents.filter((doc) => isSameDay(new Date(doc.date), date));
+    const dateKey = new Date(date).toISOString().slice(0, 10);
+    return documentsByDate.get(dateKey) || [];
   };
 
   const isSameDay = (date1: Date, date2: Date): boolean => {
@@ -304,6 +344,15 @@ export default function CalendarScreen({ navigation }: any) {
 
       {/* Calendar Grid */}
       <ScrollView style={styles.calendarScroll}>
+        {loading && (
+          <View style={styles.loadingBanner}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={[styles.loadingBannerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+              {t('common_loading')}
+            </Text>
+          </View>
+        )}
+
         <View style={[styles.calendarGrid, { backgroundColor: theme.colors.white }]}>
           {calendarDays.map((day, index) => renderDay(day, index))}
         </View>
@@ -473,6 +522,17 @@ const styles = StyleSheet.create({
   },
   calendarScroll: {
     flex: 1,
+  },
+  loadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    backgroundColor: '#fff',
+  },
+  loadingBannerText: {
+    fontSize: 13,
   },
   calendarGrid: {
     flexDirection: 'row',

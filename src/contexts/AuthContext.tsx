@@ -21,6 +21,8 @@ import {
   tryLoadKeyFromDevice,
   setupNewEncryptionKey,
   loadEncryptionKey,
+  loadEncryptionKeyWithRecoveryKey,
+  createRecoveryKey,
   rewrapEncryptionKey,
   clearEncryptionKey,
   deleteEncryptionKey,
@@ -45,7 +47,10 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   setupEncryption: (passphrase: string) => Promise<void>;
   unlockWithPassphrase: (passphrase: string) => Promise<boolean>;
+  unlockWithRecoveryKey: (recoveryKey: string) => Promise<boolean>;
   changeEncryptionPassphrase: (newPassphrase: string) => Promise<void>;
+  generateRecoveryKey: () => Promise<string>;
+  resetEncryptionWithPassword: (password: string) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: (password?: string) => Promise<void>;
 }
@@ -286,10 +291,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return false;
   };
 
+  /** Avaa salauksen recovery keyn avulla. */
+  const unlockWithRecoveryKey = async (recoveryKey: string): Promise<boolean> => {
+    if (!auth.currentUser) return false;
+    const result = await loadEncryptionKeyWithRecoveryKey(auth.currentUser.uid, recoveryKey);
+    if (result === 'ready') {
+      setEncryptionStatus('ready');
+      return true;
+    }
+    return false;
+  };
+
   /** Vaihtaa salafraasin ilman datan uudelleensalausta (masterKey pysyy samana). */
   const changeEncryptionPassphrase = async (newPassphrase: string): Promise<void> => {
     if (!auth.currentUser) throw new Error('Ei kirjautunutta käyttäjää');
     await rewrapEncryptionKey(auth.currentUser.uid, newPassphrase);
+  };
+
+  /** Luo uusi recovery key kirjautuneelle käyttäjälle. */
+  const generateRecoveryKey = async (): Promise<string> => {
+    if (!auth.currentUser) throw new Error('Ei kirjautunutta käyttäjää');
+    return await createRecoveryKey(auth.currentUser.uid);
+  };
+
+  /**
+   * Nollaa päiväkirjan salauksen käyttäjän nykyisellä kirjautumissalasanalla.
+   * Käytä tätä vain tilanteessa, jossa vanhaa salafraasia ei enää tiedetä
+   * (esim. kirjautumissalasana resetoitu).
+   */
+  const resetEncryptionWithPassword = async (password: string): Promise<void> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error('Ei kirjautunutta käyttäjää');
+
+    const providerId = currentUser.providerData?.[0]?.providerId;
+    if (providerId !== 'password') {
+      throw new Error('Toiminto on käytettävissä vain sähköpostikirjautumisella.');
+    }
+
+    if (!currentUser.email) {
+      throw new Error('Käyttäjän sähköpostia ei löytynyt.');
+    }
+
+    const credential = EmailAuthProvider.credential(currentUser.email, password);
+    await reauthenticateWithCredential(currentUser, credential);
+
+    // Luo uusi salausavain ja kapseloi se nykyisellä salasanalla.
+    // Tämä korvaa aiemman avainmateriaalin.
+    await setupNewEncryptionKey(currentUser.uid, password);
+    setEncryptionStatus('ready');
   };
 
   const logout = async () => {
@@ -410,7 +459,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithGoogle,
         setupEncryption,
         unlockWithPassphrase,
+        unlockWithRecoveryKey,
         changeEncryptionPassphrase,
+        generateRecoveryKey,
+        resetEncryptionWithPassword,
         logout,
         deleteAccount,
       }}

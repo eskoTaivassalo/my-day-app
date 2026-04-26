@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   ScrollView,
   ActivityIndicator,
   SafeAreaView,
+  InteractionManager,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -20,7 +21,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
 import {
-  getDocuments,
+  getDocumentsProgressive,
   createDocument,
   uploadDocumentFile,
   deleteDocument,
@@ -43,6 +44,10 @@ export default function DocumentsScreen({ navigation }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<FilterCategory>('all');
   const [loading, setLoading] = useState(true);
+  const [streamingLoading, setStreamingLoading] = useState(false);
+  const loadRequestIdRef = useRef(0);
+  const initialLoadDoneRef = useRef(false);
+  const loadInFlightRef = useRef(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -56,25 +61,54 @@ export default function DocumentsScreen({ navigation }: any) {
 
   const loadDocuments = useCallback(async () => {
     if (!user) return;
+    if (loadInFlightRef.current) return;
+
+    const requestId = ++loadRequestIdRef.current;
+    const showFullLoader = !initialLoadDoneRef.current;
+    loadInFlightRef.current = true;
 
     try {
-      setLoading(true);
-      const docs = await getDocuments(user.uid);
-      setDocuments(docs);
+      if (showFullLoader) {
+        setLoading(true);
+      }
+      setStreamingLoading(true);
+
+      await getDocumentsProgressive(
+        user.uid,
+        (partialDocs, done) => {
+          if (requestId !== loadRequestIdRef.current) return;
+          setDocuments(partialDocs);
+          if (done) {
+            setStreamingLoading(false);
+            setLoading(false);
+            initialLoadDoneRef.current = true;
+          }
+        },
+        10
+      );
     } catch {
       Alert.alert(t('common_error'), t('documents_load_failed'));
+      if (requestId === loadRequestIdRef.current) {
+        setStreamingLoading(false);
+        setLoading(false);
+      }
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current && showFullLoader) {
+        setLoading(false);
+      }
+      loadInFlightRef.current = false;
     }
   }, [t, user]);
 
-  useEffect(() => {
-    void loadDocuments();
-  }, [loadDocuments]);
-
   useFocusEffect(
     useCallback(() => {
-      void loadDocuments();
+      const task = InteractionManager.runAfterInteractions(() => {
+        void loadDocuments();
+      });
+
+      return () => {
+        task.cancel();
+      };
     }, [loadDocuments]),
   );
 
@@ -400,6 +434,16 @@ export default function DocumentsScreen({ navigation }: any) {
               </Text>
             </View>
           }
+          ListFooterComponent={
+            streamingLoading ? (
+              <View style={styles.streamingFooter}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Text style={[styles.streamingText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+                  {t('common_loading')}
+                </Text>
+              </View>
+            ) : null
+          }
         />
       )}
 
@@ -609,6 +653,16 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  streamingFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: spacing.md,
+  },
+  streamingText: {
+    fontSize: typography.fontSizes.sm,
   },
   listContent: {
     paddingHorizontal: spacing.lg,

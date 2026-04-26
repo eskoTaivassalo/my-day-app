@@ -25,6 +25,23 @@ const ENTRIES_COLLECTION = 'diary_entries';
 const USERS_COLLECTION = 'users';
 const DECRYPTED_IMAGE_CACHE_DIR = `${FileSystem.cacheDirectory}decrypted_images/`;
 const VIDEO_THUMBNAIL_CACHE_DIR = `${FileSystem.cacheDirectory}video_thumbnails/`;
+const USER_PROFILE_CACHE_TTL_MS = 30_000;
+
+const debugLog = (...args: unknown[]) => {
+  if (__DEV__) {
+    // Avoid verbose logging cost in production/hot paths.
+    console.log(...args);
+  }
+};
+
+type UserProfileData = {
+  photoURL?: string;
+  displayName?: string;
+  firstName?: string;
+  lastName?: string;
+};
+
+const userProfileCache = new Map<string, { data: UserProfileData | null; expiresAt: number }>();
 
 const ensureDecryptedImageCacheDir = async (): Promise<void> => {
   const dirInfo = await FileSystem.getInfoAsync(DECRYPTED_IMAGE_CACHE_DIR);
@@ -53,14 +70,22 @@ const isEncryptedImageUrl = (url: string): boolean => {
   return /\.enc(\?|$)/.test(url);
 };
 
-const safeDecryptText = (value: unknown): string => {
+const LOCKED_ENTRY_TITLE = '🔒 Lukittu merkinta';
+const LOCKED_ENTRY_CONTENT = 'Tata sisaltoa ei voi purkaa nykyisella salausavaimella.';
+
+const looksEncryptedPayload = (value: string): boolean => {
+  // secretbox payload + nonce is usually long base64 without whitespace
+  return value.length > 40 && /^[A-Za-z0-9+/=]+$/.test(value);
+};
+
+const safeDecryptText = (value: unknown, encryptedFallback = ''): string => {
   if (typeof value !== 'string') return '';
   try {
     return decryptText(value);
   } catch {
     // Backward compatibility: if old plaintext data is incorrectly marked encrypted,
     // keep rendering plaintext instead of breaking the whole entry list.
-    return value;
+    return looksEncryptedPayload(value) ? encryptedFallback : value;
   }
 };
 
@@ -459,14 +484,14 @@ export const createEntry = async (
     if (entry.imageShape !== undefined) docData.imageShape = entry.imageShape;
     if (entry.textOverlay !== undefined) docData.textOverlay = entry.textOverlay;
 
-    console.log('[createEntry] Saving entry:', {
+    debugLog('[createEntry] Saving entry:', {
       videoCount: docData.videos.length,
       thumbnailCount: Object.keys(docData.videoThumbnails).length,
       imageCount: docData.images.length,
     });
 
     const docRef = await addDoc(collection(db, ENTRIES_COLLECTION), docData);
-    console.log('[createEntry] Entry saved successfully:', docRef.id);
+    debugLog('[createEntry] Entry saved successfully:', docRef.id);
 
     return docRef.id;
   } catch (error) {
@@ -523,7 +548,7 @@ export const updateEntry = async (
       encryptedUpdates._encrypted = true;
     }
 
-    console.log('[updateEntry] Updating entry:', {
+    debugLog('[updateEntry] Updating entry:', {
       id,
       videoCount: updates.videos?.length || 0,
       thumbnailCount: Object.keys(updates.videoThumbnails || {}).length,
@@ -531,7 +556,7 @@ export const updateEntry = async (
     });
 
     await updateDoc(entryRef, encryptedUpdates);
-    console.log('[updateEntry] Entry updated successfully:', id);
+    debugLog('[updateEntry] Entry updated successfully:', id);
   } catch (error) {
     console.error('[updateEntry] Error updating entry:', error);
     throw error;
@@ -570,8 +595,8 @@ export const getEntries = async (userId: string): Promise<DiaryEntry[]> => {
 
         // Pura salaus jos kentät ovat salattuja, muuten käytä suoraan
         // (taaksepäin-yhteensopivuus vanhoille merkinnöille)
-        const title = isEncrypted ? safeDecryptText(data.title) : data.title;
-        const content = isEncrypted ? safeDecryptText(data.content) : data.content;
+        const title = isEncrypted ? safeDecryptText(data.title, LOCKED_ENTRY_TITLE) : data.title;
+        const content = isEncrypted ? safeDecryptText(data.content, LOCKED_ENTRY_CONTENT) : data.content;
         const address = data.location?.address
           ? isEncrypted
             ? safeDecryptText(data.location.address)
@@ -582,7 +607,7 @@ export const getEntries = async (userId: string): Promise<DiaryEntry[]> => {
           (data.images || []).map((imageUrl: string) => decryptImageUrlToLocalUri(imageUrl))
         );
         
-        console.log('[getEntries] Retrieved entry:', {
+        debugLog('[getEntries] Retrieved entry:', {
           id: docSnap.id,
           videoCount: (data.videos || []).length,
           thumbnailCount: Object.keys(data.videoThumbnails || {}).length,
@@ -650,16 +675,16 @@ export const getEntriesFast = async (
       const data = docSnap.data();
       const isEncrypted = data._encrypted === true;
 
-      const title = isEncrypted ? safeDecryptText(data.title) : data.title;
-      const content = isEncrypted ? safeDecryptText(data.content) : data.content;
+      const title = isEncrypted ? safeDecryptText(data.title, LOCKED_ENTRY_TITLE) : data.title;
+      const content = isEncrypted ? safeDecryptText(data.content, LOCKED_ENTRY_CONTENT) : data.content;
       const address = data.location?.address
         ? isEncrypted
           ? safeDecryptText(data.location.address)
           : data.location.address
         : undefined;
 
-      if ((data.videos || []).length > 0) {
-        console.log('[getEntriesFast] Retrieved entry with videos:', {
+      if (__DEV__ && (data.videos || []).length > 0) {
+        debugLog('[getEntriesFast] Retrieved entry with videos:', {
           id: docSnap.id,
           videoCount: data.videos.length,
           thumbnailCount: Object.keys(data.videoThumbnails || {}).length,
@@ -763,8 +788,8 @@ export const getEntriesInRange = async (
         const data = docSnap.data();
         const isEncrypted = data._encrypted === true;
 
-        const title = isEncrypted ? safeDecryptText(data.title) : data.title;
-        const content = isEncrypted ? safeDecryptText(data.content) : data.content;
+        const title = isEncrypted ? safeDecryptText(data.title, LOCKED_ENTRY_TITLE) : data.title;
+        const content = isEncrypted ? safeDecryptText(data.content, LOCKED_ENTRY_CONTENT) : data.content;
         const address = data.location?.address
           ? isEncrypted
             ? safeDecryptText(data.location.address)
@@ -827,6 +852,10 @@ export const updateUserProfile = async (userId: string, photoURL: string): Promi
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     await setDoc(userRef, { photoURL, updatedAt: Timestamp.now() }, { merge: true });
+    userProfileCache.set(userId, {
+      data: { photoURL },
+      expiresAt: Date.now() + USER_PROFILE_CACHE_TTL_MS,
+    });
   } catch (error) {
     throw error;
   }
@@ -837,24 +866,34 @@ export const updateUserProfile = async (userId: string, photoURL: string): Promi
  */
 export const getUserProfile = async (
   userId: string
-): Promise<{
-  photoURL?: string;
-  displayName?: string;
-  firstName?: string;
-  lastName?: string;
-} | null> => {
+): Promise<UserProfileData | null> => {
   try {
+    const cached = userProfileCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
     const userRef = doc(db, USERS_COLLECTION, userId);
     const userSnap = await getDoc(userRef);
     
     if (userSnap.exists()) {
-      return userSnap.data() as {
+      const data = userSnap.data() as {
         photoURL?: string;
         displayName?: string;
         firstName?: string;
         lastName?: string;
       };
+      userProfileCache.set(userId, {
+        data,
+        expiresAt: Date.now() + USER_PROFILE_CACHE_TTL_MS,
+      });
+      return data;
     }
+
+    userProfileCache.set(userId, {
+      data: null,
+      expiresAt: Date.now() + USER_PROFILE_CACHE_TTL_MS,
+    });
     return null;
   } catch (error) {
     throw error;

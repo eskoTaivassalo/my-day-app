@@ -44,6 +44,7 @@ import { db } from './firebase';
 
 // ─── Vakiot ───────────────────────────────────────────────────────────────────
 const PBKDF2_ITERATIONS = 100_000;
+const RECOVERY_KEY_PBKDF2_ITERATIONS = 150_000;
 const SECURE_STORE_PREFIX = 'diary_master_key_v2_';
 const VERIFY_MAGIC = 'MY_DAY_DIARY_V2_VERIFIED';
 
@@ -58,6 +59,30 @@ const deriveWrappingKey = (passphrase: string, saltBase64: string): Uint8Array =
     c: PBKDF2_ITERATIONS,
     dkLen: 32,
   });
+
+/** Johtaa wrappingKey:n recovery keyn ja suolan avulla. */
+const deriveRecoveryWrappingKey = (recoveryKey: string, saltBase64: string): Uint8Array =>
+  pbkdf2(sha256, decodeUTF8(recoveryKey), decodeBase64(saltBase64), {
+    c: RECOVERY_KEY_PBKDF2_ITERATIONS,
+    dkLen: 32,
+  });
+
+const bytesToHex = (bytes: Uint8Array): string =>
+  Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+
+const normalizeRecoveryKey = (value: string): string => value.replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
+
+const formatRecoveryKey = (hex: string): string => {
+  const normalized = normalizeRecoveryKey(hex);
+  const groups: string[] = [];
+  for (let i = 0; i < normalized.length; i += 4) {
+    groups.push(normalized.slice(i, i + 4));
+  }
+  return groups.join('-');
+};
 
 /** Kapseloi masterKey:n käärintäavaimella. */
 const wrapMasterKey = (masterKey: Uint8Array, wrappingKey: Uint8Array): string => {
@@ -99,6 +124,7 @@ const cacheInSecureStore = async (userId: string, masterKey: Uint8Array): Promis
 // ─── Julkinen API ─────────────────────────────────────────────────────────────
 
 export type LoadKeyResult = 'ready' | 'setup_needed' | 'wrong_passphrase';
+export type LoadRecoveryKeyResult = 'ready' | 'not_configured' | 'wrong_recovery_key';
 
 /**
  * Yrittää ladata masterKey:n laitteen SecureStoresta.
@@ -174,6 +200,59 @@ export const rewrapEncryptionKey = async (userId: string, newPassphrase: string)
   await updateDoc(userRef, { encryptionSalt: saltBase64, encryptedMasterKey });
   // Päivitä SecureStore uudella kappeleella — masterKey on sama
   await cacheInSecureStore(userId, _masterKey);
+};
+
+/**
+ * Luo käyttäjälle recovery keyn, jolla masterKey voidaan avata,
+ * vaikka salasana/salafraasi vaihtuisi.
+ */
+export const createRecoveryKey = async (userId: string): Promise<string> => {
+  if (!_masterKey) throw new Error('Salausavain ei ole ladattu. Kirjaudu uudelleen sisään.');
+
+  const rawRecoveryKey = bytesToHex(nacl.randomBytes(16));
+  const recoveryKey = formatRecoveryKey(rawRecoveryKey);
+  const normalizedRecoveryKey = normalizeRecoveryKey(recoveryKey);
+
+  const recoverySalt = encodeBase64(nacl.randomBytes(32));
+  const recoveryWrappingKey = deriveRecoveryWrappingKey(normalizedRecoveryKey, recoverySalt);
+  const recoveryEncryptedMasterKey = wrapMasterKey(_masterKey, recoveryWrappingKey);
+
+  const userRef = doc(db, 'users', userId);
+  await setDoc(
+    userRef,
+    {
+      recoverySalt,
+      recoveryEncryptedMasterKey,
+    },
+    { merge: true }
+  );
+
+  return recoveryKey;
+};
+
+/** Avaa masterKey:n recovery keyn avulla. */
+export const loadEncryptionKeyWithRecoveryKey = async (
+  userId: string,
+  recoveryKey: string
+): Promise<LoadRecoveryKeyResult> => {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+
+  if (!snap.exists()) return 'not_configured';
+
+  const data = snap.data();
+  if (!data.recoverySalt || !data.recoveryEncryptedMasterKey) {
+    return 'not_configured';
+  }
+
+  const normalizedRecoveryKey = normalizeRecoveryKey(recoveryKey);
+  const recoveryWrappingKey = deriveRecoveryWrappingKey(normalizedRecoveryKey, data.recoverySalt);
+  const masterKey = unwrapMasterKey(data.recoveryEncryptedMasterKey, recoveryWrappingKey);
+  if (!masterKey) return 'wrong_recovery_key';
+
+  _masterKey = masterKey;
+  await cacheInSecureStore(userId, masterKey);
+  return 'ready';
 };
 
 /** Salaa merkkijonon. Palauttaa Base64-koodatun salatun arvon. */

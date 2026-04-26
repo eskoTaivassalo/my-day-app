@@ -56,8 +56,9 @@ import {
 
 const { width } = Dimensions.get('window');
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
-const INITIAL_ENTRIES_LIMIT = 60;
-const INITIAL_MEDIA_RESOLVE_LIMIT = 24;
+const INITIAL_ENTRIES_LIMIT = Platform.OS === 'android' ? 40 : 60;
+const INITIAL_MEDIA_RESOLVE_LIMIT = Platform.OS === 'android' ? 12 : 24;
+const FOCUS_REFRESH_MIN_INTERVAL_MS = 30000;
 const GREETING_VARIANT_COUNT = 100;
 
 const GREETING_OPENERS = {
@@ -198,6 +199,9 @@ export default function TimelineScreen({ navigation }: any) {
   // Muista viimeiset tilastot joista näytettiin toast
   const lastProcessedStats = useRef<Stats | null>(null);
   const entriesLoadInFlightRef = useRef(false);
+  const achievementsNavigationAtRef = useRef(0);
+  const hasLoadedTimelineRef = useRef(false);
+  const lastFocusRefreshAtRef = useRef(0);
   const greetingOpacityAnim = useRef(new Animated.Value(0)).current;
   const greetingTranslateAnim = useRef(new Animated.Value(14)).current;
   const greetingScaleAnim = useRef(new Animated.Value(0.9)).current;
@@ -268,6 +272,16 @@ export default function TimelineScreen({ navigation }: any) {
     () => greetingBank[greetingVariantIndex % greetingBank.length] || '',
     [greetingBank, greetingVariantIndex]
   );
+
+  const openAchievements = () => {
+    const now = Date.now();
+    if (now - achievementsNavigationAtRef.current < 700) {
+      return;
+    }
+
+    achievementsNavigationAtRef.current = now;
+    navigation.navigate('Achievements');
+  };
 
   const greetingPalette = useMemo(() => {
     const hue = (greetingVariantIndex * 47) % 360;
@@ -423,16 +437,34 @@ export default function TimelineScreen({ navigation }: any) {
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     React.useCallback(() => {
-      if (user && encryptionStatus === 'ready') {
-        // Lataa saavutukset ensin, sitten entries
+      if (!user || encryptionStatus !== 'ready') {
+        return;
+      }
+
+      const task = InteractionManager.runAfterInteractions(() => {
+        const now = Date.now();
+        const shouldRefresh = !hasLoadedTimelineRef.current || now - lastFocusRefreshAtRef.current >= FOCUS_REFRESH_MIN_INTERVAL_MS;
+
+        void loadUserProfile();
+
+        if (!shouldRefresh) {
+          return;
+        }
+
+        lastFocusRefreshAtRef.current = now;
+
         loadUnlockedAchievements().then((ids) => {
-          loadEntries(ids).then(() => {
+          loadEntries(ids, { showLoading: entries.length === 0 }).then(() => {
+            hasLoadedTimelineRef.current = true;
             maybeShowTodayReminders({ ignoreLastShown: true });
           });
         });
-        loadUserProfile();
-      }
-    }, [user, encryptionStatus])
+      });
+
+      return () => {
+        task.cancel();
+      };
+    }, [user, encryptionStatus, entries.length])
   );
 
   const loadUnlockedAchievements = async (): Promise<number[]> => {
@@ -461,7 +493,7 @@ export default function TimelineScreen({ navigation }: any) {
     }
   };
 
-  const loadEntries = async (unlockedIds?: number[]) => {
+  const loadEntries = async (unlockedIds?: number[], options?: { showLoading?: boolean }) => {
     if (!user || encryptionStatus !== 'ready') return;
 
     // Estä päällekkäiset lataukset (esim. focus + strict mode -tuplakutsu)
@@ -472,9 +504,12 @@ export default function TimelineScreen({ navigation }: any) {
     
     // Use provided IDs or fall back to state (for refresh scenarios)
     const previouslyUnlockedIds = unlockedIds !== undefined ? unlockedIds : unlockedAchievementIds;
+    const showLoading = options?.showLoading ?? entries.length === 0;
     
     try {
-      setEntriesLoading(true);
+      if (showLoading) {
+        setEntriesLoading(true);
+      }
       const userEntries = await getEntriesFast(user.uid, INITIAL_ENTRIES_LIMIT);
 
       // Delay heavy media processing and only process initially visible items.
@@ -485,6 +520,7 @@ export default function TimelineScreen({ navigation }: any) {
       // Näytä lista heti (älä odota saavutusten tallennuksia)
       setEntries(userEntries);
       setEntriesLoading(false);
+      hasLoadedTimelineRef.current = true;
       
       // Calculate new stats
       const newStats = calculateStats(userEntries);
@@ -1233,7 +1269,7 @@ export default function TimelineScreen({ navigation }: any) {
       <View style={styles.achievementsContainer}>
         <View style={styles.achievementsRowHeader}>
           <Text style={[styles.achievementsRowTitle, themed.primaryText]}>Seuraavat tavoitteet</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Achievements')}>
+          <TouchableOpacity onPress={openAchievements}>
             <Text style={[styles.achievementsRowAction, themed.linkText]}>Nayta kaikki</Text>
           </TouchableOpacity>
         </View>
@@ -1249,7 +1285,7 @@ export default function TimelineScreen({ navigation }: any) {
               key={achievement.id}
               style={[styles.achievementCard, styles.achievementCardLocked, themed.cardBg]}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('Achievements')}
+              onPress={openAchievements}
             >
               <Text style={[styles.achievementCardIcon, styles.achievementCardIconLocked]}>
                 {achievement.icon}
@@ -1303,7 +1339,12 @@ export default function TimelineScreen({ navigation }: any) {
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
         extraData={videoThumbnailMap}
-        removeClippedSubviews={false}
+        // Virtualization tuning for smoother fast scrolling, especially on lower-end devices.
+        initialNumToRender={8}
+        maxToRenderPerBatch={6}
+        updateCellsBatchingPeriod={60}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS === 'android'}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl 

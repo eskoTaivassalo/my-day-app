@@ -25,7 +25,15 @@ import { useTheme } from '../contexts/ThemeContext';
  * Sähköpostikirjautujat eivät koskaan näe tätä ruutua — heillä Firebase-salasana = salafraasi.
  */
 export default function EncryptionPassphraseScreen() {
-  const { encryptionStatus, setupEncryption, unlockWithPassphrase, logout } = useAuth();
+  const {
+    encryptionStatus,
+    setupEncryption,
+    unlockWithPassphrase,
+    unlockWithRecoveryKey,
+    generateRecoveryKey,
+    resetEncryptionWithPassword,
+    logout,
+  } = useAuth();
   const { language } = useLanguage();
   const { theme } = useTheme();
   const isDark = theme.id === 'midnight';
@@ -56,6 +64,26 @@ export default function EncryptionPassphraseScreen() {
         confirmPlaceholder: 'Confirm passphrase',
         setupButton: 'Set passphrase',
         unlockButton: 'Unlock diary',
+        resetWithPasswordButton: 'Password changed? Reset diary encryption',
+        resetTitle: 'Reset encryption?',
+        resetBody:
+          'Use this only if your account password was changed/reset and old passphrase no longer works.\n\n' +
+          'Your old encrypted diary content cannot be decrypted after reset.',
+        resetAction: 'Reset encryption',
+        cancelAction: 'Cancel',
+        passwordRequiredForReset: 'Enter your current account password in the field first.',
+        resetDoneTitle: 'Encryption reset done',
+        resetDoneBody: 'Diary encryption now uses your current account password.',
+        recoveryModeToggle: 'Use recovery key instead',
+        passphraseModeToggle: 'Use passphrase instead',
+        recoveryPlaceholder: 'Recovery key (e.g. 1A2B-3C4D-...)',
+        recoveryUnlockButton: 'Unlock with recovery key',
+        recoveryWrongTitle: 'Wrong recovery key',
+        recoveryWrongBody: 'Recovery key was incorrect or not configured for this account.',
+        recoveryKeyTitle: 'Save your recovery key',
+        recoveryKeyBody:
+          'Store this recovery key in a safe place (password manager). It can unlock your diary if passphrase/password changes.',
+        recoveryKeyWarning: 'This key is shown only now.',
         logout: 'Sign out',
         info:
           '🔐 Your passphrase never leaves your device to the server. It is used to derive the encryption key protecting your diary.',
@@ -86,6 +114,26 @@ export default function EncryptionPassphraseScreen() {
         confirmPlaceholder: 'Bekrafta losenfras',
         setupButton: 'Stall in losenfras',
         unlockButton: 'Las upp dagboken',
+        resetWithPasswordButton: 'Losenord andrat? Nollstall dagbokens kryptering',
+        resetTitle: 'Nollstalla kryptering?',
+        resetBody:
+          'Anvand detta endast om ditt kontolosenord har andrats/aterstallts och den gamla losenfrasen inte fungerar.\n\n' +
+          'Ditt gamla krypterade dagboksinnehall kan inte dekrypteras efter nollstallning.',
+        resetAction: 'Nollstall kryptering',
+        cancelAction: 'Avbryt',
+        passwordRequiredForReset: 'Ange ditt nuvarande kontolosenord i faltet forst.',
+        resetDoneTitle: 'Kryptering nollstalld',
+        resetDoneBody: 'Dagbokens kryptering anvander nu ditt nuvarande kontolosenord.',
+        recoveryModeToggle: 'Anvand recovery key i stallet',
+        passphraseModeToggle: 'Anvand losenfras i stallet',
+        recoveryPlaceholder: 'Recovery key (t.ex. 1A2B-3C4D-...)',
+        recoveryUnlockButton: 'Las upp med recovery key',
+        recoveryWrongTitle: 'Fel recovery key',
+        recoveryWrongBody: 'Recovery key var fel eller saknas for detta konto.',
+        recoveryKeyTitle: 'Spara din recovery key',
+        recoveryKeyBody:
+          'Spara denna recovery key pa ett sakert stalle (losenordshanterare). Den kan lasa upp dagboken om losenfras/losenord andras.',
+        recoveryKeyWarning: 'Nyckeln visas bara nu.',
         logout: 'Logga ut',
         info:
           '🔐 Losenfrasen lamnar aldrig din enhet till servern. Den anvands for att skapa krypteringsnyckeln som skyddar din dagbok.',
@@ -115,6 +163,26 @@ export default function EncryptionPassphraseScreen() {
         confirmPlaceholder: 'Vahvista salafraasi',
         setupButton: 'Aseta salafraasi',
         unlockButton: 'Avaa paivakirja',
+        resetWithPasswordButton: 'Salasana vaihtui? Nollaa paivakirjan salaus',
+        resetTitle: 'Nollataanko salaus?',
+        resetBody:
+          'Kayta tata vain jos tilin salasana on vaihdettu/resetoitu eika vanha salafraasi toimi.\n\n' +
+          'Vanhaa salattua paivakirjasisaltoa ei voi purkaa nollauksen jalkeen.',
+        resetAction: 'Nollaa salaus',
+        cancelAction: 'Peruuta',
+        passwordRequiredForReset: 'Syota ensin nykyinen tilin salasana kenttaan.',
+        resetDoneTitle: 'Salaus nollattu',
+        resetDoneBody: 'Paivakirjan salaus kayttaa nyt nykyista tilin salasanaasi.',
+        recoveryModeToggle: 'Kayta palautusavainta salafraasin sijaan',
+        passphraseModeToggle: 'Kayta salafraasia palautusavaimen sijaan',
+        recoveryPlaceholder: 'Palautusavain (esim. 1A2B-3C4D-...)',
+        recoveryUnlockButton: 'Avaa palautusavaimella',
+        recoveryWrongTitle: 'Vaara palautusavain',
+        recoveryWrongBody: 'Palautusavain on vaara tai sita ei ole asetettu tille.',
+        recoveryKeyTitle: 'Tallenna palautusavain',
+        recoveryKeyBody:
+          'Tallenna tama palautusavain turvalliseen paikkaan (salasanamanageri). Silla voit avata paivakirjan, jos salafraasi/salasana muuttuu.',
+        recoveryKeyWarning: 'Avain naytetaan vain nyt.',
         logout: 'Kirjaudu ulos',
         info:
           '🔐 Salafraasi ei koskaan lahde laitteeltasi palvelimelle. Sen avulla johdetaan salausavain paivakirjasi suojaamiseksi.',
@@ -124,10 +192,17 @@ export default function EncryptionPassphraseScreen() {
 
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [recoveryKeyInput, setRecoveryKeyInput] = useState('');
+  const [useRecoveryMode, setUseRecoveryMode] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
-    if (!passphrase.trim()) {
+    if (!isSetup && useRecoveryMode) {
+      if (!recoveryKeyInput.trim()) {
+        Alert.alert(strings.error, strings.recoveryPlaceholder);
+        return;
+      }
+    } else if (!passphrase.trim()) {
       Alert.alert(strings.error, strings.enterPassphrase);
       return;
     }
@@ -147,6 +222,16 @@ export default function EncryptionPassphraseScreen() {
     try {
       if (isSetup) {
         await setupEncryption(passphrase);
+        const recoveryKey = await generateRecoveryKey();
+        Alert.alert(
+          strings.recoveryKeyTitle,
+          `${strings.recoveryKeyBody}\n\n${recoveryKey}\n\n${strings.recoveryKeyWarning}`
+        );
+      } else if (useRecoveryMode) {
+        const ok = await unlockWithRecoveryKey(recoveryKeyInput);
+        if (!ok) {
+          Alert.alert(strings.recoveryWrongTitle, strings.recoveryWrongBody);
+        }
       } else {
         const ok = await unlockWithPassphrase(passphrase);
         if (!ok) {
@@ -161,6 +246,39 @@ export default function EncryptionPassphraseScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleResetWithPassword = async () => {
+    if (isSetup) return;
+
+    const password = passphrase.trim();
+    if (!password) {
+      Alert.alert(strings.error, strings.passwordRequiredForReset);
+      return;
+    }
+
+    Alert.alert(
+      strings.resetTitle,
+      strings.resetBody,
+      [
+        { text: strings.cancelAction, style: 'cancel' },
+        {
+          text: strings.resetAction,
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              await resetEncryptionWithPassword(password);
+              Alert.alert(strings.resetDoneTitle, strings.resetDoneBody);
+            } catch (error: any) {
+              Alert.alert(strings.error, error.message ?? strings.unknownError);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -192,25 +310,57 @@ export default function EncryptionPassphraseScreen() {
           </View>
         )}
 
+        {!isSetup && (
+          <TouchableOpacity
+            style={styles.modeToggleButton}
+            onPress={() => setUseRecoveryMode((prev) => !prev)}
+            disabled={loading}
+          >
+            <Text style={[styles.modeToggleText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>
+              {useRecoveryMode ? strings.passphraseModeToggle : strings.recoveryModeToggle}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Lomake */}
-        <TextInput
-          style={[
-            styles.input,
-            {
-              backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
-              borderColor: theme.colors.border,
-              color: theme.colors.text,
-              fontFamily: theme.fonts.bodyFamily,
-            },
-          ]}
-          placeholder={isSetup ? strings.passphrasePlaceholderSetup : strings.passphrasePlaceholderUnlock}
-          placeholderTextColor={theme.colors.textSecondary}
-          value={passphrase}
-          onChangeText={setPassphrase}
-          secureTextEntry
-          autoCapitalize="none"
-          autoComplete="password"
-        />
+        {useRecoveryMode && !isSetup ? (
+          <TextInput
+            style={[
+              styles.input,
+              {
+                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={strings.recoveryPlaceholder}
+            placeholderTextColor={theme.colors.textSecondary}
+            value={recoveryKeyInput}
+            onChangeText={setRecoveryKeyInput}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+        ) : (
+          <TextInput
+            style={[
+              styles.input,
+              {
+                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+                fontFamily: theme.fonts.bodyFamily,
+              },
+            ]}
+            placeholder={isSetup ? strings.passphrasePlaceholderSetup : strings.passphrasePlaceholderUnlock}
+            placeholderTextColor={theme.colors.textSecondary}
+            value={passphrase}
+            onChangeText={setPassphrase}
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="password"
+          />
+        )}
 
         {isSetup && (
           <TextInput
@@ -241,10 +391,22 @@ export default function EncryptionPassphraseScreen() {
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={[styles.buttonText, { fontFamily: theme.fonts.bodyFamily }] }>
-              {isSetup ? strings.setupButton : strings.unlockButton}
+              {isSetup ? strings.setupButton : useRecoveryMode ? strings.recoveryUnlockButton : strings.unlockButton}
             </Text>
           )}
         </TouchableOpacity>
+
+        {!isSetup && !useRecoveryMode && (
+          <TouchableOpacity
+            style={styles.resetButton}
+            onPress={handleResetWithPassword}
+            disabled={loading}
+          >
+            <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+              {strings.resetWithPasswordButton}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* Kirjaudu ulos -linkki */}
         <TouchableOpacity style={styles.logoutButton} onPress={logout}>
@@ -334,6 +496,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  modeToggleButton: {
+    alignItems: 'center',
+    paddingVertical: 6,
+    marginBottom: 10,
+  },
+  modeToggleText: {
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  resetButton: {
+    alignItems: 'center',
+    paddingVertical: 8,
+    marginTop: -8,
+    marginBottom: 8,
+  },
+  resetButtonText: {
+    fontSize: 13,
+    textAlign: 'center',
   },
   logoutButton: {
     alignItems: 'center',

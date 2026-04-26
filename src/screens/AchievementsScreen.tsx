@@ -1,15 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
+  SectionList,
+  ActivityIndicator,
+  InteractionManager,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { getUnlockedAchievementIds } from '../services/achievementStorageService';
+import { getCachedUnlockedAchievementIds, getUnlockedAchievementIds } from '../services/achievementStorageService';
 import {
   achievements,
   getLocalizedAchievement,
@@ -23,21 +26,91 @@ export default function AchievementsScreen({ navigation }: any) {
   const { theme } = useTheme();
   const isDark = theme.id === 'midnight';
   const [unlockedIds, setUnlockedIds] = useState<number[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [displayedUnlockedCount, setDisplayedUnlockedCount] = useState(0);
+  const loadRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!user) return;
+    const cachedIds = getCachedUnlockedAchievementIds(user.uid);
+    if (cachedIds) {
+      setUnlockedIds(cachedIds);
+      setDisplayedUnlockedCount(cachedIds.length);
+      setLoading(false);
+    }
+  }, [user]);
 
   const loadAchievements = useCallback(async () => {
     if (!user) return;
 
+    const requestId = ++loadRequestIdRef.current;
+    const cachedIds = getCachedUnlockedAchievementIds(user.uid);
+
     try {
+      if (!cachedIds) {
+        setLoading(true);
+      }
       const ids = await getUnlockedAchievementIds(user.uid);
-      setUnlockedIds(ids);
+      if (requestId === loadRequestIdRef.current) {
+        setUnlockedIds(ids);
+      }
     } catch {
-      setUnlockedIds([]);
+      if (requestId === loadRequestIdRef.current) {
+        setUnlockedIds([]);
+      }
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [user]);
 
+  useFocusEffect(
+    useCallback(() => {
+      const task = InteractionManager.runAfterInteractions(() => {
+        void loadAchievements();
+      });
+
+      return () => {
+        task.cancel();
+      };
+    }, [loadAchievements])
+  );
+
   useEffect(() => {
-    void loadAchievements();
-  }, [loadAchievements]);
+    const target = unlockedIds.length;
+    let frameId = 0;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const step = () => {
+      setDisplayedUnlockedCount((prev) => {
+        if (prev === target) {
+          return prev;
+        }
+
+        const diff = target - prev;
+        const increment = diff > 0 ? Math.max(1, Math.ceil(diff / 6)) : Math.min(-1, Math.floor(diff / 6));
+        const next = prev + increment;
+
+        if (next !== target) {
+          timeoutId = setTimeout(() => {
+            frameId = requestAnimationFrame(step);
+          }, 32);
+        }
+
+        return next;
+      });
+    };
+
+    frameId = requestAnimationFrame(step);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [unlockedIds.length]);
 
   const renderAchievement = useCallback(({ item }: { item: Achievement }) => {
     const isUnlocked = unlockedIds.includes(item.id);
@@ -163,8 +236,86 @@ export default function AchievementsScreen({ navigation }: any) {
   const totalCount = achievements.length;
   const progressPercent = useMemo(() => {
     if (totalCount === 0) return 0;
-    return (unlockedCount / totalCount) * 100;
-  }, [totalCount, unlockedCount]);
+    return (displayedUnlockedCount / totalCount) * 100;
+  }, [displayedUnlockedCount, totalCount]);
+
+  const sections = useMemo(() => {
+    const nextSections: Array<{ title: string; data: Achievement[]; key: string }> = [];
+
+    if (unlockedGroups.length > 0) {
+      nextSections.push(...unlockedGroups.map(([groupName, groupAchievements]) => ({
+        title: groupName,
+        data: groupAchievements,
+        key: `unlocked-${groupName}`,
+      })));
+    }
+
+    if (inProgressGroups.length > 0) {
+      nextSections.push(...inProgressGroups.map(([groupName, groupAchievements]) => ({
+        title: groupName,
+        data: groupAchievements,
+        key: `progress-${groupName}`,
+      })));
+    }
+
+    return nextSections;
+  }, [inProgressGroups, unlockedGroups]);
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: { title: string; key: string } }) => {
+      const isUnlockedSection = section.key.startsWith('unlocked-');
+      return (
+        <View style={styles.group}>
+          <Text style={[styles.groupSubtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+            {section.title}
+          </Text>
+          {isUnlockedSection ? null : null}
+        </View>
+      );
+    },
+    [theme.colors.textSecondary, theme.fonts.bodyFamily]
+  );
+
+  const listHeader = useMemo(() => (
+    <>
+      <View style={[styles.progressContainer, { backgroundColor: theme.colors.white }] }>
+        <Text style={[styles.progressText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
+          {t('achievements_progress', { unlocked: displayedUnlockedCount, total: totalCount })}
+        </Text>
+        <View style={[styles.progressBar, { backgroundColor: isDark ? '#1E293B' : colors.gray200 }]}>
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${progressPercent}%`, backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary },
+            ]}
+          />
+        </View>
+        {loading && (
+          <View style={styles.loadingInline}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={[styles.loadingInlineText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
+              {t('common_loading')}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.group}>
+        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Saavutetut</Text>
+      </View>
+      {unlockedGroups.length === 0 && !loading ? (
+        <View style={styles.emptyState}>
+          <Text style={[styles.emptyStateText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>Ei saavutettuja viela.</Text>
+        </View>
+      ) : null}
+
+      {unlockedGroups.length > 0 && inProgressGroups.length > 0 ? <View style={styles.groupDivider} /> : null}
+
+      <View style={styles.group}>
+        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Kesken</Text>
+      </View>
+    </>
+  ), [displayedUnlockedCount, isDark, loading, progressPercent, t, theme.colors.primary, theme.colors.primaryDark, theme.colors.text, theme.colors.textSecondary, theme.colors.white, theme.fonts.bodyFamily, totalCount, unlockedGroups.length, inProgressGroups.length]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }] }>
@@ -177,49 +328,19 @@ export default function AchievementsScreen({ navigation }: any) {
         <View style={styles.headerRight} />
       </View>
 
-      {/* Progress Summary */}
-      <View style={[styles.progressContainer, { backgroundColor: theme.colors.white }] }>
-        <Text style={[styles.progressText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>
-          {t('achievements_progress', { unlocked: unlockedCount, total: totalCount })}
-        </Text>
-        <View style={[styles.progressBar, { backgroundColor: isDark ? '#1E293B' : colors.gray200 }]}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${progressPercent}%`, backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary },
-            ]}
-          />
-        </View>
-      </View>
-
-      {/* Achievements List */}
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.group}>
-          <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Saavutetut</Text>
-        </View>
-        {unlockedGroups.map(([groupName, groupAchievements]) => (
-          <View key={`unlocked-${groupName}`} style={styles.group}>
-            <Text style={styles.groupSubtitle}>{groupName}</Text>
-            {groupAchievements.map((achievement) => (
-              <React.Fragment key={achievement.id}>{renderAchievement({ item: achievement })}</React.Fragment>
-            ))}
-          </View>
-        ))}
-
-        <View style={styles.groupDivider} />
-
-        <View style={styles.group}>
-          <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Kesken</Text>
-        </View>
-        {inProgressGroups.map(([groupName, groupAchievements]) => (
-          <View key={`progress-${groupName}`} style={styles.group}>
-            <Text style={styles.groupSubtitle}>{groupName}</Text>
-            {groupAchievements.map((achievement) => (
-              <React.Fragment key={achievement.id}>{renderAchievement({ item: achievement })}</React.Fragment>
-            ))}
-          </View>
-        ))}
-      </ScrollView>
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={renderAchievement}
+        renderSectionHeader={renderSectionHeader}
+        ListHeaderComponent={listHeader}
+        contentContainerStyle={styles.listContent}
+        stickySectionHeadersEnabled={false}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={8}
+        removeClippedSubviews
+      />
     </View>
   );
 }
@@ -280,8 +401,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderRadius: borderRadius.full,
   },
-  scrollView: {
-    flex: 1,
+  listContent: {
+    paddingBottom: spacing.xl,
   },
   group: {
     marginHorizontal: spacing.lg,
@@ -304,6 +425,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.borderLight,
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,
+  },
+  loadingInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  loadingInlineText: {
+    fontSize: typography.fontSizes.sm,
+  },
+  emptyState: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+  },
+  emptyStateText: {
+    fontSize: typography.fontSizes.sm,
   },
   achievementItem: {
     flexDirection: 'row',

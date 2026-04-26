@@ -76,6 +76,33 @@ const getFallbackExtensionByType = (fileType: string): string => {
 const resolveExtension = (fileName: string, fileType: string): string =>
   getExtensionFromFileName(fileName) ?? getFallbackExtensionByType(fileType);
 
+const mapSnapshotToDocument = (id: string, data: any): Document => {
+  const isEncrypted = data._encrypted === true;
+  const encryptionVersion = typeof data._encryptionVersion === 'number'
+    ? data._encryptionVersion
+    : 1;
+  const hasEncryptedMetadata = isEncrypted && encryptionVersion >= DOCUMENT_ENCRYPTION_VERSION;
+
+  return {
+    id,
+    userId: data.userId,
+    title: isEncrypted ? safeDecryptText(data.title) : data.title,
+    description: data.description
+      ? isEncrypted ? safeDecryptText(data.description) : data.description
+      : undefined,
+    category: hasEncryptedMetadata ? safeDecryptText(data.category) as Document['category'] : data.category,
+    fileUrl: hasEncryptedMetadata ? safeDecryptText(data.fileUrl) : data.fileUrl,
+    fileName: hasEncryptedMetadata ? safeDecryptText(data.fileName) : data.fileName,
+    fileType: data.fileType,
+    fileSize: data.fileSize,
+    thumbnailUrl: data.thumbnailUrl,
+    date: data.date.toDate(),
+    tags: hasEncryptedMetadata ? decryptTags(data.tags) : (data.tags || []),
+    createdAt: data.createdAt.toDate(),
+    updatedAt: data.updatedAt.toDate(),
+  };
+};
+
 export const getDecryptedDocumentUri = async (
   fileUrl: string,
   fileName: string,
@@ -223,33 +250,50 @@ export const getDocuments = async (userId: string): Promise<Document[]> => {
     const querySnapshot = await getDocs(q);
     const documents: Document[] = [];
 
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      const isEncrypted = data._encrypted === true;
-      const encryptionVersion = typeof data._encryptionVersion === 'number'
-        ? data._encryptionVersion
-        : 1;
-      const hasEncryptedMetadata = isEncrypted && encryptionVersion >= DOCUMENT_ENCRYPTION_VERSION;
-
-      documents.push({
-        id: doc.id,
-        userId: data.userId,
-        title: isEncrypted ? safeDecryptText(data.title) : data.title,
-        description: data.description
-          ? isEncrypted ? safeDecryptText(data.description) : data.description
-          : undefined,
-        category: hasEncryptedMetadata ? safeDecryptText(data.category) as Document['category'] : data.category,
-        fileUrl: hasEncryptedMetadata ? safeDecryptText(data.fileUrl) : data.fileUrl,
-        fileName: hasEncryptedMetadata ? safeDecryptText(data.fileName) : data.fileName,
-        fileType: data.fileType,
-        fileSize: data.fileSize,
-        thumbnailUrl: data.thumbnailUrl,
-        date: data.date.toDate(),
-        tags: hasEncryptedMetadata ? decryptTags(data.tags) : (data.tags || []),
-        createdAt: data.createdAt.toDate(),
-        updatedAt: data.updatedAt.toDate(),
-      });
+    querySnapshot.forEach((docSnap) => {
+      documents.push(mapSnapshotToDocument(docSnap.id, docSnap.data()));
     });
+
+    return documents;
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
+ * Get all documents progressively for smooth UI updates on large datasets.
+ * Calls `onPartial` after each processed batch.
+ */
+export const getDocumentsProgressive = async (
+  userId: string,
+  onPartial: (documents: Document[], done: boolean) => void,
+  batchSize = 12
+): Promise<Document[]> => {
+  try {
+    const q = query(
+      collection(db, DOCUMENTS_COLLECTION),
+      where('userId', '==', userId),
+      orderBy('date', 'desc')
+    );
+
+    const querySnapshot = await getDocs(q);
+    const documents: Document[] = [];
+
+    for (let i = 0; i < querySnapshot.docs.length; i += 1) {
+      const docSnap = querySnapshot.docs[i];
+      documents.push(mapSnapshotToDocument(docSnap.id, docSnap.data()));
+
+      const shouldEmit = documents.length % batchSize === 0 || i === querySnapshot.docs.length - 1;
+      if (shouldEmit) {
+        onPartial([...documents], i === querySnapshot.docs.length - 1);
+        // Yield to UI thread between chunks.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    if (querySnapshot.docs.length === 0) {
+      onPartial([], true);
+    }
 
     return documents;
   } catch (error) {

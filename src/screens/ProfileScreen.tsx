@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
-import { getEntries, uploadProfileImage, updateUserProfile, getUserProfile } from '../services/diaryService';
+import { getEntriesFast, uploadProfileImage, updateUserProfile, getUserProfile } from '../services/diaryService';
 import { DiaryEntry } from '../types/DiaryEntry';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 import { calculateStreaks } from '../utils/achievementUtils';
@@ -33,6 +33,7 @@ export default function ProfileScreen({ navigation }: any) {
   const [showDeletePasswordModal, setShowDeletePasswordModal] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const achievementsNavigationAtRef = useRef(0);
   const [stats, setStats] = useState({
     totalEntries: 0,
     totalImages: 0,
@@ -66,7 +67,8 @@ export default function ProfileScreen({ navigation }: any) {
     if (!user) return;
 
     try {
-      const userEntries = await getEntries(user.uid);
+      // Lightweight fetch: avoid decrypting/downloading media when opening profile.
+      const userEntries = await getEntriesFast(user.uid);
 
       // Calculate stats
       const totalImages = userEntries.reduce((sum, entry) => sum + (entry.images?.length || 0), 0);
@@ -183,6 +185,16 @@ export default function ProfileScreen({ navigation }: any) {
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
+  const openAchievements = () => {
+    const now = Date.now();
+    if (now - achievementsNavigationAtRef.current < 700) {
+      return;
+    }
+
+    achievementsNavigationAtRef.current = now;
+    navigation.navigate('Achievements');
+  };
+
   const themed = useMemo(
     () => ({
       screenBg: { backgroundColor: theme.colors.backgroundLight },
@@ -285,7 +297,7 @@ export default function ProfileScreen({ navigation }: any) {
         <View style={styles.settingsContainer}>
           <TouchableOpacity
             style={[styles.achievementsButton, themed.cardBg]}
-            onPress={() => navigation.navigate('Achievements')}
+            onPress={openAchievements}
           >
             <View style={styles.achievementsButtonContent}>
               <Text style={styles.achievementsButtonIcon}>🏆</Text>
