@@ -354,6 +354,15 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 300,
   },
+  previewLoadingContainer: {
+    height: 300,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  previewLoadingText: {
+    fontSize: typography.fontSizes.sm,
+  },
   fileTypePreview: {
     backgroundColor: colors.white,
     marginHorizontal: spacing.lg,

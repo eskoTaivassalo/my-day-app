@@ -78,8 +78,8 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     if (permissionStatus === 'denied' && permissionAsked) {
       Alert.alert(
-        t('image_library_permission_required'),
-        t('image_library_permission_settings')
+        t('common_permission_required'),
+        t('image_library_permission1')
       );
       return false;
     }
@@ -114,7 +114,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
   const saveImageToLibrary = async (uri: string) => {
     const hasPermission = await ensureMediaLibraryPermission();
     if (!hasPermission) {
-      Alert.alert(t('image_library_permission_required'), t('image_library_permission_msg'));
+      Alert.alert(t('common_permission_required'), t('image_library_permission2'));
       return;
     }
 
@@ -126,7 +126,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
       const asset = await MediaLibrary.createAssetAsync(download.uri);
 
       await addAssetToAlbum(asset, 'MyDayApp');
-      Alert.alert(t('image_library_saved_title'), t('image_library_saved_single'));
+      Alert.alert(t('common_success'), t('image_library_saved_single'));
     } catch {
       Alert.alert(t('common_error'), t('image_library_save_failed'));
     } finally {
@@ -148,7 +148,7 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     const hasPermission = await ensureMediaLibraryPermission();
     if (!hasPermission) {
-      Alert.alert(t('image_library_permission_required'), t('image_library_permission_msg'));
+      Alert.alert(t('common_permission_required'), t('image_library_permission2'));
       return;
     }
 

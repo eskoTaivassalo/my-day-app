@@ -80,7 +80,7 @@ export default function RemindersScreen({ navigation }: any) {
     }
 
     if (dateTime.getTime() <= Date.now()) {
-      Alert.alert(t('reminders_time_passed'), t('reminders_time_passed_msg'));
+      Alert.alert(t('reminders_past_time'), t('reminders_past_time_msg'));
       return;
     }
 
@@ -130,7 +130,7 @@ export default function RemindersScreen({ navigation }: any) {
   };
 
   const handleDelete = (id: string, notificationId?: string, calendarEventId?: string) => {
-    Alert.alert(t('reminders_delete_title'), t('reminders_delete_confirm'), [
+    Alert.alert(t('reminders_delete_confirm_title'), t('reminders_delete_confirm_msg'), [
       { text: t('common_cancel'), style: 'cancel' },
       {
         text: t('reminders_delete_button'),

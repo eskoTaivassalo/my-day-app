@@ -170,10 +170,10 @@ export default function ProfileScreen({ navigation }: any) {
         // Update local state
         setProfileImage(photoURL);
         
-        Alert.alert(t('common_success'), t('settings_profile_image_updated'));
+        Alert.alert(t('common_success'), t('profile_photo_success'));
       }
     } catch {
-      Alert.alert(t('common_error'), t('settings_profile_image_failed'));
+      Alert.alert(t('common_error'), t('profile_photo_failed'));
     } finally {
       setUploadingImage(false);
     }

@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   title: {
-    fontSize: typography.fontSizes['2xl'],
+    fontSize: typography.fontSizes.xxl,
     fontWeight: typography.fontWeights.bold,
     marginBottom: spacing.sm,
   },
@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
   },
   logoutBtn: {
-    marginTop: spacing['2xl'],
+    marginTop: spacing.xxl,
     padding: spacing.md,
   },
   logoutText: {

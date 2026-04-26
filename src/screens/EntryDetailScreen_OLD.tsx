@@ -20,7 +20,7 @@ import { updateEntry, deleteEntry, uploadImages } from '../services/diaryService
 import { useAuth } from '../contexts/AuthContext';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
-type LayoutType = 'grid' | 'masonry' | 'magazine';
+type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
 type TextPosition = 'top' | 'middle' | 'bottom';
 type ImageShape = 'square' | 'circle' | 'landscape';
 
@@ -119,7 +119,13 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       }
 
       // Ota kuvakaappaus koko merkinnästä
-      const uri = await viewShotRef.current.capture();
+      const capture = viewShotRef.current?.capture;
+      if (!capture) {
+        Alert.alert('Virhe', 'Kuvakaappauksen ottaminen epäonnistui');
+        return;
+      }
+
+      const uri = await capture();
       
       // Tarkista että jakaminen on mahdollista
       const isAvailable = await Sharing.isAvailableAsync();

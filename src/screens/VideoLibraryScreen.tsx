@@ -90,8 +90,8 @@ export default function VideoLibraryScreen({ navigation }: any) {
 
     if (permissionStatus === 'denied' && permissionAsked) {
       Alert.alert(
-        t('video_library_permission_required'),
-        t('video_library_permission_settings')
+        t('common_permission_required'),
+        t('video_library_permission1')
       );
       return false;
     }
@@ -132,7 +132,7 @@ export default function VideoLibraryScreen({ navigation }: any) {
 
     const hasPermission = await ensureMediaLibraryPermission();
     if (!hasPermission) {
-      Alert.alert(t('video_library_permission_required'), t('video_library_permission_msg'));
+      Alert.alert(t('common_permission_required'), t('video_library_permission2'));
       return;
     }
 

@@ -158,6 +158,70 @@ eas build --profile production --platform android
 eas build --profile production --platform ios
 ```
 
+## 🔁 DevOps työnkulku
+
+Repossa on nyt tarkoitus käyttää jatkuvaa mobiili-DevOps-rytmiä:
+
+1. jokainen muutos validoidaan lokaalisti ennen pushia
+2. GitHub Actions ajaa automaattisen tarkistuksen `main`-haaran push- ja PR-tapahtumissa
+3. iOS- ja Android-bundle tarkistetaan CI:ssä ilman että jokainen virhe löytyy vasta build-palvelussa
+4. oikea laitetestaus tehdään Android-puhelimella ja iPhonella ennen releasea
+
+### Lokaalit tarkistukset
+
+```bash
+npm run typecheck
+npm run doctor
+npm run bundle:android
+npm run bundle:ios
+
+# kaikki yhdellä komennolla
+npm run verify
+```
+
+### EAS build -komennot
+
+```bash
+# Android preview
+npm run eas:build:android:preview
+
+# iOS preview (TestFlight / device build)
+npm run eas:build:ios:preview
+
+# iOS simulator build (vaatii simulatorin ajamiseen Macin)
+npm run eas:build:ios:simulator
+```
+
+## 🍎 iOS-tuki ja testaus
+
+Projektissa on nyt iOS bundle identifier asetettuna, joten EAS iOS build voidaan ottaa osaksi normaalia julkaisupolkua.
+
+### Tarkeä rajoite Windowsilla
+
+Apple iOS Simulator ei ole asennettavissa Windowsiin. Se kuuluu Xcodeen ja toimii vain macOS:ssa.
+
+Taman vuoksi suositeltu iOS-optimointipolku tassa projektissa on:
+
+1. kehita normaalisti Windowsilla
+2. validoi koodi lokaalisti komennolla `npm run verify`
+3. rakenna iOS-versio EAS:lla pilvessa
+4. testaa ja optimoi oikealla iPhonella
+5. jos tarvitset simulatorin, kayta Macia tai erillista macOS-rakennetta
+
+### Apple-laitteella optimointi
+
+Kun iOS preview build on valmis, testaa ainakin seuraavat kohdat oikealla iPhonella:
+
+1. Achievements-nakymaan siirtyminen edestakaisin
+2. Timeline-nopea scrollaus
+3. Calendar- ja Documents-valilehtien ensireaktio
+4. kuvien ja videoiden latausajat
+5. muistin kaytto pitkan session aikana
+
+Jos haluat tarkempaa iOS-suorituskykyprofilointia, tee se Xcodella Instrumentsilla Macissa tai TestFlight-buildin avulla oikealla laitteella.
+
+Yksityiskohtainen vaiheistus loytyy tiedostosta [docs/ios-optimization-playbook.md](docs/ios-optimization-playbook.md).
+
 ## 🎯 Seuraavat askeleet
 
 1. **Firebase-integraation viimeistely**

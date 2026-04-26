@@ -5,7 +5,6 @@
     "scheme": "mydayapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "main": "index.ts",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -15,7 +14,9 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.eskotaivassalo.mydayapp",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
