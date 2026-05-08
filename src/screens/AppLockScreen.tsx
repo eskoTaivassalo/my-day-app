@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ export default function AppLockScreen() {
   const [locked, setLocked] = useState(false);
   const [lockSeconds, setLockSeconds] = useState(0);
   const shakeAnim = useState(new Animated.Value(0))[0];
+  const hasPromptedBiometrics = useRef(false);
 
   // Countdown timer when too many attempts
   useEffect(() => {
@@ -45,6 +46,15 @@ export default function AppLockScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, [locked, lockSeconds]);
+
+  // Biometrics is primary unlock method when enabled; PIN remains fallback.
+  useEffect(() => {
+    if (!biometricsEnabled || !biometricsAvailable || locked) return;
+    if (hasPromptedBiometrics.current) return;
+
+    hasPromptedBiometrics.current = true;
+    unlockWithBiometrics();
+  }, [biometricsEnabled, biometricsAvailable, locked, unlockWithBiometrics]);
 
   const shake = () => {
     Vibration.vibrate(200);

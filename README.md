@@ -120,7 +120,7 @@ service firebase.storage {
 ### 4. Konfiguroi Authentication
 1. Avaa Authentication
 2. Ota käyttöön Email/Password -kirjautuminen
-3. (Valinnainen) Ota käyttöön Google Sign-In
+3. Google-kirjautumista ei käytetä tässä sovelluksessa.
 
 ### 5. Kopioi Firebase-konfiguraatio
 1. Mene Project Settings → General
@@ -217,6 +217,68 @@ Kun iOS preview build on valmis, testaa ainakin seuraavat kohdat oikealla iPhone
 3. Calendar- ja Documents-valilehtien ensireaktio
 4. kuvien ja videoiden latausajat
 5. muistin kaytto pitkan session aikana
+
+## 🛠️ Korjaus: puuttuvat kuvat (file://decrypted_images)
+
+Jos joissakin merkinnöissä `images`-kenttään on päätynyt paikallinen cache-polku (`file:///.../decrypted_images/...`), alla oleva migraatio yrittää korjata viittaukset takaisin Storage-URL:eiksi.
+
+Tärkeää:
+1. Aja aina ensin dry-run.
+2. Käytä samaa käyttäjää kuin jonka merkintöjä korjataan.
+
+Komennot:
+
+```bash
+# Dry-run (ei kirjoita tietokantaan)
+npm run migrate:broken-image-refs -- \
+  --userId <FIREBASE_UID> \
+  --email <EMAIL> \
+  --password <PASSWORD>
+
+# Oikea kirjoitus
+npm run migrate:broken-image-refs -- \
+  --userId <FIREBASE_UID> \
+  --email <EMAIL> \
+  --password <PASSWORD> \
+  --apply
+```
+
+Lisäoptiot:
+
+```bash
+--windowMinutes 1440   # oletus 24h; sallittu aikaleimaikkuna kuvien matchaukseen
+--limit 200            # montako rikkinäistä entryä käsitellään enintään
+```
+
+Skripti näyttää aina ensin raportin (`matched/desired`, confidence). `--apply` päivittää vain entryt, joille löytyi vähintään yksi korvaava kuva.
+
+### Orpojen kuvien siivous (Storage)
+
+Jos vanhoja kuvia on jäänyt Storageen ilman viittausta Firestore-merkintöihin, käytä turvallista cleanup-skriptiä.
+
+Turvarajat:
+1. dry-run oletuksena
+2. vain `images/<uid>`-kansio
+3. vain `.enc`-tiedostot
+4. UID-match pakollinen (`--userId` == kirjautuneen käyttäjän uid)
+5. ikäraja (`--olderThanMinutes`) ettei tuoreita tiedostoja poisteta
+
+```bash
+# Dry-run
+npm run cleanup:orphaned-images -- \
+  --userId <FIREBASE_UID> \
+  --email <EMAIL> \
+  --password <PASSWORD>
+
+# Oikea poisto
+npm run cleanup:orphaned-images -- \
+  --userId <FIREBASE_UID> \
+  --email <EMAIL> \
+  --password <PASSWORD> \
+  --olderThanMinutes 180 \
+  --maxDeletes 200 \
+  --apply
+```
 
 Jos haluat tarkempaa iOS-suorituskykyprofilointia, tee se Xcodella Instrumentsilla Macissa tai TestFlight-buildin avulla oikealla laitteella.
 

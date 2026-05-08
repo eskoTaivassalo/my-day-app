@@ -5,8 +5,8 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
@@ -101,10 +101,15 @@ export default function PrivacyPolicyScreen({ navigation }: any) {
   });
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView edges={['top']} style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
       <View style={[styles.header, { borderBottomColor: theme.colors.border, backgroundColor: theme.colors.white }]}>
         {navigation && (
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backButton}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="button"
+          >
             <Text style={[styles.backText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{language === 'en' ? '← Back' : language === 'sv' ? '← Tillbaka' : '← Takaisin'}</Text>
           </TouchableOpacity>
         )}
@@ -155,6 +160,9 @@ const styles = StyleSheet.create({
   },
   backButton: {
     marginBottom: 8,
+    minHeight: 40,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
   },
   backText: {
     color: '#007AFF',

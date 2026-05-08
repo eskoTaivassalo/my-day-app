@@ -14,7 +14,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { getEntries } from '../services/diaryService';
+import { getEntriesFast, resolveEntryImagesInBackground } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 interface ImageItem {
@@ -54,19 +54,28 @@ export default function ImageLibraryScreen({ navigation }: any) {
 
     try {
       setLoading(true);
-      const entries = await getEntries(user.uid);
+      // Nopea lataus ensin — kuvat ovat vielä encrypted URL:eja
+      const entries = await getEntriesFast(user.uid);
       const allImages: ImageItem[] = [];
-
       entries.forEach((entry) => {
         entry.images.forEach((uri) => {
           allImages.push({ uri, entryId: entry.id, date: entry.date });
         });
       });
-
       setImages(allImages);
+      setLoading(false);
+
+      // Pura salaus taustalla ja päivitä URI:t
+      const resolved = await resolveEntryImagesInBackground(entries);
+      const resolvedImages: ImageItem[] = [];
+      resolved.forEach((entry) => {
+        entry.images.forEach((uri) => {
+          resolvedImages.push({ uri, entryId: entry.id, date: entry.date });
+        });
+      });
+      setImages(resolvedImages);
     } catch {
       setImages([]);
-    } finally {
       setLoading(false);
     }
   };

@@ -335,18 +335,18 @@ export default function AchievementsScreen({ navigation }: any) {
       </View>
 
       <View style={styles.group}>
-        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Saavutetut</Text>
+        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('achievements_section_unlocked')}</Text>
       </View>
       {unlockedGroups.length === 0 && !loading ? (
         <View style={styles.emptyState}>
-          <Text style={[styles.emptyStateText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>Ei saavutettuja viela.</Text>
+          <Text style={[styles.emptyStateText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('achievements_empty_unlocked')}</Text>
         </View>
       ) : null}
 
       {unlockedGroups.length > 0 && inProgressGroups.length > 0 ? <View style={styles.groupDivider} /> : null}
 
       <View style={styles.group}>
-        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>Kesken</Text>
+        <Text style={[styles.groupTitle, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('achievements_section_in_progress')}</Text>
       </View>
     </>
   ), [displayedUnlockedCount, isDark, loading, progressPercent, t, theme.colors.primary, theme.colors.primaryDark, theme.colors.text, theme.colors.textSecondary, theme.colors.white, theme.fonts.bodyFamily, totalCount, unlockedGroups.length, inProgressGroups.length]);

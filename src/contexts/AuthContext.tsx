@@ -2,20 +2,18 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut,
   onAuthStateChanged,
   User,
-  GoogleAuthProvider,
-  signInWithCredential,
   deleteUser,
   EmailAuthProvider,
   reauthenticateWithCredential,
+  updatePassword,
 } from 'firebase/auth';
-import { collection, query, where, getDocs, deleteDoc, doc, setDoc, getDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, deleteDoc, doc, setDoc, getDoc, Timestamp, limit } from 'firebase/firestore';
 import { ref, listAll, deleteObject } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
 import { auth, db, storage } from '../services/firebase';
 import {
   tryLoadKeyFromDevice,
@@ -29,8 +27,6 @@ import {
   getEncryptionStatus,
 } from '../services/encryptionService';
 
-WebBrowser.maybeCompleteAuthSession();
-
 const AUTH_USER_KEY = '@my_day_auth_user';
 
 // Lippu joka estää onAuthStateChanged:ia häiritsemästä aktiivista kirjautumista
@@ -43,13 +39,15 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   encryptionStatus: EncryptionStatus;
+  encryptionRevision: number;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  sendResetPasswordEmail: (email: string) => Promise<void>;
   setupEncryption: (passphrase: string) => Promise<void>;
   unlockWithPassphrase: (passphrase: string) => Promise<boolean>;
   unlockWithRecoveryKey: (recoveryKey: string) => Promise<boolean>;
   changeEncryptionPassphrase: (newPassphrase: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   generateRecoveryKey: () => Promise<string>;
   resetEncryptionWithPassword: (password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -58,10 +56,71 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const ensureUserDocument = async (firebaseUser: User): Promise<void> => {
+  const userRef = doc(db, 'users', firebaseUser.uid);
+  const userSnap = await getDoc(userRef);
+
+  if (!userSnap.exists()) {
+    await setDoc(userRef, {
+      uid: firebaseUser.uid,
+      email: firebaseUser.email,
+      displayName: firebaseUser.displayName ?? null,
+      photoURL: firebaseUser.photoURL ?? null,
+      provider: firebaseUser.providerData?.[0]?.providerId ?? 'email',
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+  }
+};
+
+const hasExistingEncryptedContent = async (userId: string): Promise<boolean> => {
+  const [entrySnap, documentSnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(db, 'diary_entries'),
+        where('userId', '==', userId),
+        where('_encrypted', '==', true),
+        limit(1)
+      )
+    ),
+    getDocs(
+      query(
+        collection(db, 'documents'),
+        where('userId', '==', userId),
+        where('_encrypted', '==', true),
+        limit(1)
+      )
+    ),
+  ]);
+
+  return !entrySnap.empty || !documentSnap.empty;
+};
+
+const unlockEncryptionWithPassword = async (userId: string, password: string): Promise<'ready' | 'initialized'> => {
+  const result = await loadEncryptionKey(userId, password);
+
+  if (result === 'ready') {
+    return 'ready';
+  }
+
+  if (result === 'wrong_passphrase') {
+    throw new Error('Kirjautuminen onnistui, mutta vanhojen merkintöjen salauksen avaus epäonnistui tällä salasanalla. Sovellus ei luonut uutta avainta vanhan päälle.');
+  }
+
+  const hasEncryptedContent = await hasExistingEncryptedContent(userId);
+  if (hasEncryptedContent) {
+    throw new Error('Tililtä löytyi aiemmin salattua sisältöä, mutta salausavainta ei löytynyt käyttäjäprofiilista. Vanhaa avainta ei ylikirjoitettu.');
+  }
+
+  await setupNewEncryptionKey(userId, password);
+  return 'initialized';
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [encryptionStatus, setEncryptionStatus] = useState<EncryptionStatus>('loading');
+  const [encryptionRevision, setEncryptionRevision] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -115,63 +174,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (loaded) {
             setEncryptionStatus('ready');
           } else {
-            // Sähköpostikirjautumisella yritetään avata avain viimeisimmällä
-            // onnistuneella kirjautumissalasanalla automaattisesti.
             const providerId = firebaseUser.providerData?.[0]?.providerId;
             if (providerId === 'password' && _lastEmailSignInPassword) {
-              const loadResult = await loadEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
-              if (loadResult === 'ready') {
-                setEncryptionStatus('ready');
-              } else if (loadResult === 'setup_needed') {
-                await setupNewEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
-                setEncryptionStatus('ready');
-              } else {
-                // Varmista, että email-käyttäjällä avain sidotaan aina
-                // nykyiseen kirjautumissalasanaan.
-                await setupNewEncryptionKey(firebaseUser.uid, _lastEmailSignInPassword);
-                setEncryptionStatus('ready');
-              }
+              await unlockEncryptionWithPassword(firebaseUser.uid, _lastEmailSignInPassword);
+              setEncryptionStatus('ready');
             } else {
-              // Uusi laite tai SecureStore tyhjennetty.
-              // Aseta tila heti, jotta UI ei odota verkkoa käynnistyspolulla.
-              setEncryptionStatus('needs_passphrase');
+              // Uudelleenasennuksen jälkeen laitteen SecureStore on tyhjä.
+              // Pakota kirjautuminen uudelleen, jotta sähköpostisalasanaa voidaan
+              // käyttää vanhan salausavaimen avaamiseen.
+              _lastEmailSignInPassword = null;
+              clearEncryptionKey();
+              await signOut(auth);
+              setEncryptionStatus('loading');
+              return;
             }
 
-            // Tarkennetaan taustalla onko kyseessä setup-vaihe.
+            // Tarkennetaan taustalla onko kyseessä setup-vaihe ja varmistetaan
+            // samalla että käyttäjädokumentti on olemassa — yksi getDoc riittää.
             void getDoc(doc(db, 'users', firebaseUser.uid))
               .then((snap) => {
-                if (!snap.exists() || !snap.data().encryptedMasterKey) {
-                  setEncryptionStatus('needs_setup');
+                if (!snap.exists()) {
+                  void ensureUserDocument(firebaseUser).catch(() => undefined);
                 }
               })
               .catch(() => {
-                // Pidä needs_passphrase fallbackina verkkovirheissä.
+                // Ignore profile hydration errors here.
               });
           }
         } catch (error) {
-          setEncryptionStatus('needs_passphrase');
+          clearEncryptionKey();
+          await signOut(auth).catch(() => undefined);
+          setEncryptionStatus('loading');
         } finally {
           setLoading(false);
         }
 
-        try {
-          const userRef = doc(db, 'users', firebaseUser.uid);
-          const userSnap = await getDoc(userRef);
-          if (!userSnap.exists()) {
-            await setDoc(userRef, {
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName ?? null,
-              photoURL: firebaseUser.photoURL ?? null,
-              provider: firebaseUser.providerData?.[0]?.providerId ?? 'email',
-              createdAt: Timestamp.now(),
-              updatedAt: Timestamp.now(),
-            });
-          }
-        } catch (error) {
-        } finally {
-          setLoading(false);
-        }
+        // Käyttäjädokumentin luonti hoidetaan ylläolevan getDoc-kutsun yhteydessä.
+        // Ei tarvita erillistä getDoc-kutsua täällä.
       } else {
         _lastEmailSignInPassword = null;
         setLoading(false);
@@ -191,6 +230,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       _lastEmailSignInPassword = password;
       const cred = await signInWithEmailAndPassword(auth, email, password);
 
+      await ensureUserDocument(cred.user);
+
       // Fast-path: jos avain löytyy laitteelta, älä tee verkko+PBKDF2-kierrosta.
       const loadedFromDevice = await tryLoadKeyFromDevice(cred.user.uid);
       if (loadedFromDevice) {
@@ -198,20 +239,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Lataa salausavain — sähköpostisalasana = päiväkirjan salafraasi
-      const result = await loadEncryptionKey(cred.user.uid, password);
-      if (result === 'setup_needed') {
-        // Uusi käyttäjä tai migraatio vanhasta versiosta
-        await setupNewEncryptionKey(cred.user.uid, password);
-      } else if (result === 'wrong_passphrase') {
-        // Kohdista salausavaimen kapselointi kirjautumissalasanaan,
-        // jotta kirjautumisen jälkeen avain on aina käytettävissä.
-        await setupNewEncryptionKey(cred.user.uid, password);
-      }
+      await unlockEncryptionWithPassword(cred.user.uid, password);
+
       if (getEncryptionStatus().isReady) {
         setEncryptionStatus('ready');
       }
     } catch (error: any) {
+      clearEncryptionKey();
+      await signOut(auth).catch(() => undefined);
       throw new Error(error.message);
     } finally {
       _activeSignInInProgress = false;
@@ -225,16 +260,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       _activeSignInInProgress = true;
       _lastEmailSignInPassword = password;
       const credential = await createUserWithEmailAndPassword(auth, email, password);
-      // Luo users-dokumentti Firestoreen heti rekisteröinnin yhteydessä
-      await setDoc(doc(db, 'users', credential.user.uid), {
-        uid: credential.user.uid,
-        email: credential.user.email,
-        displayName: credential.user.displayName ?? null,
-        photoURL: null,
-        provider: 'email',
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-      });
+      await ensureUserDocument(credential.user);
       // Aseta salaus — sähköpostisalasana = päiväkirjan salafraasi
       await setupNewEncryptionKey(credential.user.uid, password);
       setEncryptionStatus('ready');
@@ -246,71 +272,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signInWithGoogle = async () => {
+  const sendResetPasswordEmail = async (email: string): Promise<void> => {
     try {
-      setLoading(true);
-      const clientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-      if (!clientId) {
-        throw new Error('Google Web Client ID not configured');
-      }
-
-      const redirectUri = AuthSession.makeRedirectUri();
-
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-        `client_id=${clientId}&` +
-        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-        `response_type=id_token&` +
-        `scope=openid%20profile%20email&` +
-        `nonce=${Math.random().toString(36)}`;
-
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-
-      if (result.type === 'success') {
-        const { url } = result;
-        const idToken = url.split('id_token=')[1]?.split('&')[0];
-
-        if (idToken) {
-          _activeSignInInProgress = true;
-          const credential = GoogleAuthProvider.credential(idToken);
-          const userCredential = await signInWithCredential(auth, credential);
-          // Luo users-dokumentti Firestoreen jos ei vielä ole (uusi Google-käyttäjä)
-          const userRef = doc(db, 'users', userCredential.user.uid);
-          const userSnap = await getDoc(userRef);
-          if (!userSnap.exists()) {
-            await setDoc(userRef, {
-              uid: userCredential.user.uid,
-              email: userCredential.user.email,
-              displayName: userCredential.user.displayName ?? null,
-              photoURL: userCredential.user.photoURL ?? null,
-              provider: 'google',
-              createdAt: Timestamp.now(),
-              updatedAt: Timestamp.now(),
-            });
-          }
-          // Yritä ladata avain laitteen SecureStoresta
-          const loaded = await tryLoadKeyFromDevice(userCredential.user.uid);
-          if (loaded) {
-            setEncryptionStatus('ready');
-          } else if (userSnap.exists() && userSnap.data().encryptedMasterKey) {
-            setEncryptionStatus('needs_passphrase');
-          } else {
-            setEncryptionStatus('needs_setup');
-          }
-        } else {
-          throw new Error('No ID token found');
-        }
-      } else {
-        throw new Error('Authentication cancelled or failed');
-      }
+      await sendPasswordResetEmail(auth, email.trim());
     } catch (error: any) {
-      throw new Error(error.message);
-    } finally {
-      _activeSignInInProgress = false;
-      setLoading(false);
+      throw new Error(error?.message || 'Password reset email failed');
     }
   };
 
-  /** Google-käyttäjät: asettaa päiväkirjan salafraasin ensimmäisen kirjautumisen jälkeen. */
+  /** Asettaa päiväkirjan salafraasin kirjautuneelle käyttäjälle. */
   const setupEncryption = async (passphrase: string): Promise<void> => {
     if (!auth.currentUser) throw new Error('Ei kirjautunutta käyttäjää');
     await setupNewEncryptionKey(auth.currentUser.uid, passphrase);
@@ -343,6 +313,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const changeEncryptionPassphrase = async (newPassphrase: string): Promise<void> => {
     if (!auth.currentUser) throw new Error('Ei kirjautunutta käyttäjää');
     await rewrapEncryptionKey(auth.currentUser.uid, newPassphrase);
+  };
+
+  /**
+   * Vaihtaa kirjautumissalasanan JA kapseloi masterKey:n uudelleen uudella salasanalla.
+   * Järjestys: rewrap ensin (Firestore), sitten Firebase Auth updatePassword.
+   * Jos rewrap onnistuu mutta Auth-päivitys epäonnistuu, masterKey on silti
+   * auki uudella salasanalla — tämä on turvallisempi kuin päinvastainen järjestys.
+   */
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<void> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser || !currentUser.email) throw new Error('Ei kirjautunutta käyttäjää');
+
+    // Estetään onAuthStateChanged-käsittelijää häiritsemästä operaation aikana.
+    // reauthenticateWithCredential ja updatePassword molemmat laukaisevat
+    // onAuthStateChanged, joka voisi virhetilanteessa ajaa clearEncryptionKey().
+    _activeSignInInProgress = true;
+    try {
+      // 1. Varmista tuore kirjautuminen nykyisellä salasanalla
+      const credential = EmailAuthProvider.credential(currentUser.email, currentPassword);
+      await reauthenticateWithCredential(currentUser, credential);
+
+      // 2. Kapseloi masterKey uudelleen uudella salasanalla (Firestore päivittyy)
+      await rewrapEncryptionKey(currentUser.uid, newPassword);
+
+      // 3. Päivitä Firebase Auth -salasana
+      await updatePassword(currentUser, newPassword);
+
+      // 4. Päivitä välimuisti
+      _lastEmailSignInPassword = newPassword;
+      setEncryptionRevision((prev) => prev + 1);
+    } finally {
+      _activeSignInInProgress = false;
+    }
   };
 
   /** Luo uusi recovery key kirjautuneelle käyttäjälle. */
@@ -492,13 +495,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         loading,
         encryptionStatus,
+        encryptionRevision,
         signIn,
         signUp,
-        signInWithGoogle,
+        sendResetPasswordEmail,
         setupEncryption,
         unlockWithPassphrase,
         unlockWithRecoveryKey,
         changeEncryptionPassphrase,
+        changePassword,
         generateRecoveryKey,
         resetEncryptionWithPassword,
         logout,

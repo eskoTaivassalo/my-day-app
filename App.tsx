@@ -36,7 +36,8 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import ImageLibraryScreen from './src/screens/ImageLibraryScreen';
 import VideoLibraryScreen from './src/screens/VideoLibraryScreen';
 import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
-import { AppLockProvider } from './src/contexts/AppLockContext';
+import { AppLockProvider, useAppLock } from './src/contexts/AppLockContext';
+import AppLockScreen from './src/screens/AppLockScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -205,6 +206,7 @@ function AppNavigator() {
 // Root navigator with auth check
 function RootNavigator() {
   const { user, loading } = useAuth();
+  const { isLocked, pinEnabled } = useAppLock();
   const { t } = useLanguage();
   const { theme } = useTheme();
   const notificationListener = useRef<Notifications.Subscription | null>(null);
@@ -244,6 +246,9 @@ function RootNavigator() {
   }
 
   if (!user) return <AuthNavigator />;
+
+  // Show PIN lock screen only when PIN is enabled and app is locked
+  if (pinEnabled && isLocked) return <AppLockScreen />;
 
   return <AppNavigator />;
 }

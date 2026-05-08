@@ -23,7 +23,7 @@ import {
 } from '../services/reminderService';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getEntries,
+  getEntriesFast,
 } from '../services/diaryService';
 import { useTheme, ThemeColors } from '../contexts/ThemeContext';
 import { useAppLock } from '../contexts/AppLockContext';
@@ -264,7 +264,7 @@ export default function SettingsScreen({ navigation }: any) {
 
     try {
       setBackupLoading(true);
-      const entries = await getEntries(user.uid);
+      const entries = await getEntriesFast(user.uid);
       const exportData = entries.map((entry) => ({
         ...entry,
         date: entry.date.toISOString(),

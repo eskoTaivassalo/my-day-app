@@ -14,7 +14,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { getEntries, resolveVideoUriForPlayback } from '../services/diaryService';
+import { getEntriesFast, resolveVideoUriForPlayback } from '../services/diaryService';
 import { colors, spacing, borderRadius, typography, shadows, commonStyles } from '../theme/theme';
 
 interface VideoItem {
@@ -53,7 +53,7 @@ export default function VideoLibraryScreen({ navigation }: any) {
 
     try {
       setLoading(true);
-      const entries = await getEntries(user.uid);
+      const entries = await getEntriesFast(user.uid);
       const allVideos: VideoItem[] = [];
 
       for (const entry of entries) {

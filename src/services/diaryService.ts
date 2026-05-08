@@ -13,7 +13,7 @@ import {
   limit,
   Timestamp,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, getBytes, deleteObject } from 'firebase/storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { auth, db, storage } from './firebase';
@@ -25,12 +25,12 @@ const ENTRIES_COLLECTION = 'diary_entries';
 const USERS_COLLECTION = 'users';
 const DECRYPTED_IMAGE_CACHE_DIR = `${FileSystem.cacheDirectory}decrypted_images/`;
 const VIDEO_THUMBNAIL_CACHE_DIR = `${FileSystem.cacheDirectory}video_thumbnails/`;
-const USER_PROFILE_CACHE_TTL_MS = 30_000;
+const USER_PROFILE_CACHE_TTL_MS = 5 * 60_000; // 5 minuuttia
+const decryptedImagePathCache = new Map<string, string>();
 
 const debugLog = (...args: unknown[]) => {
   if (__DEV__) {
     // Avoid verbose logging cost in production/hot paths.
-    console.log(...args);
   }
 };
 
@@ -66,8 +66,194 @@ const hashString = (value: string): string => {
   return Math.abs(hash).toString(36);
 };
 
+const inferImageExtension = (bytes: Uint8Array): string => {
+  // JPEG
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'jpg';
+  }
+
+  // PNG
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'png';
+  }
+
+  // GIF
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'gif';
+  }
+
+  // WebP (RIFF....WEBP)
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'webp';
+  }
+
+  // HEIC/HEIF (ISO BMFF with 'ftyp' brand)
+  if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]).toLowerCase();
+    if (brand.includes('heic') || brand.includes('heix') || brand.includes('hevc') || brand.includes('hevx')) {
+      return 'heic';
+    }
+    if (brand.includes('heif') || brand.includes('heim') || brand.includes('heis') || brand.includes('mif1')) {
+      return 'heif';
+    }
+  }
+
+  return 'jpg';
+};
+
 const isEncryptedImageUrl = (url: string): boolean => {
   return /\.enc(\?|$)/.test(url);
+};
+
+const isTransientDecryptedImageUri = (uri: string): boolean => {
+  if (typeof uri !== 'string') return false;
+  if (!uri.startsWith('file://')) return false;
+  return /\/decrypted_images\//.test(uri);
+};
+
+const getStoragePathFromUrl = (url: string): string | null => {
+  if (!url) return null;
+
+  if (url.startsWith('gs://')) {
+    const withoutScheme = url.slice('gs://'.length);
+    const firstSlash = withoutScheme.indexOf('/');
+    if (firstSlash === -1) return null;
+    return withoutScheme.slice(firstSlash + 1);
+  }
+
+  // Firebase download URL: .../o/{encodedPath}?alt=media&token=...
+  const oMarker = '/o/';
+  const oIndex = url.indexOf(oMarker);
+  if (oIndex !== -1) {
+    const encodedPathWithQuery = url.slice(oIndex + oMarker.length);
+    const queryIndex = encodedPathWithQuery.indexOf('?');
+    const encodedPath = queryIndex === -1
+      ? encodedPathWithQuery
+      : encodedPathWithQuery.slice(0, queryIndex);
+
+    if (encodedPath) {
+      try {
+        return decodeURIComponent(encodedPath);
+      } catch {
+        return encodedPath;
+      }
+    }
+  }
+
+  // storage.googleapis.com/{bucket}/{path}
+  const hostMarker = 'storage.googleapis.com/';
+  const hostIndex = url.indexOf(hostMarker);
+  if (hostIndex !== -1) {
+    const afterHost = url.slice(hostIndex + hostMarker.length);
+    const queryIndex = afterHost.indexOf('?');
+    const pathWithBucket = queryIndex === -1 ? afterHost : afterHost.slice(0, queryIndex);
+    const slashIndex = pathWithBucket.indexOf('/');
+    if (slashIndex !== -1) {
+      const encodedPath = pathWithBucket.slice(slashIndex + 1);
+      try {
+        return decodeURIComponent(encodedPath);
+      } catch {
+        return encodedPath;
+      }
+    }
+  }
+
+  return null;
+};
+
+const toStorageIdentity = (url: string): string => getStoragePathFromUrl(url) || url;
+
+const getMediaUrlsFromEntryData = (entryData: any): string[] => {
+  const images = Array.isArray(entryData?.images) ? entryData.images : [];
+  const videos = Array.isArray(entryData?.videos) ? entryData.videos : [];
+  const thumbnails = Object.values(entryData?.videoThumbnails || {}).filter(
+    (value): value is string => typeof value === 'string'
+  );
+
+  return [...images, ...videos, ...thumbnails].filter((value): value is string => typeof value === 'string');
+};
+
+const getRemovedMediaUrls = (previousUrls: string[], nextUrls: string[]): string[] => {
+  const nextIdentitySet = new Set(nextUrls.map(toStorageIdentity));
+
+  return previousUrls.filter((url) => {
+    const identity = toStorageIdentity(url);
+    return !nextIdentitySet.has(identity);
+  });
+};
+
+const deleteMediaUrlsBestEffort = async (urls: string[]): Promise<void> => {
+  const uniquePaths = Array.from(
+    new Set(
+      urls
+        .map((url) => getStoragePathFromUrl(url))
+        .filter((path): path is string => Boolean(path))
+    )
+  );
+
+  await Promise.all(
+    uniquePaths.map(async (storagePath) => {
+      try {
+        await deleteObject(ref(storage, storagePath));
+      } catch (error: any) {
+        // Missing object is already effectively deleted.
+        if (error?.code !== 'storage/object-not-found' && __DEV__) {
+          console.warn('[deleteMediaUrlsBestEffort] Failed to delete storage object:', storagePath, error);
+        }
+      }
+    })
+  );
+};
+
+const fetchEncryptedImageBytes = async (imageUrl: string): Promise<Uint8Array> => {
+  const storagePath = getStoragePathFromUrl(imageUrl);
+  if (storagePath) {
+    try {
+      const encryptedBytes = await getBytes(ref(storage, storagePath));
+      return encryptedBytes instanceof Uint8Array ? encryptedBytes : new Uint8Array(encryptedBytes);
+    } catch {
+      // Fallback to direct URL fetch below.
+    }
+  }
+
+  try {
+    const directResponse = await fetch(imageUrl);
+    if (directResponse.ok) {
+      return new Uint8Array(await directResponse.arrayBuffer());
+    }
+  } catch {
+    // Fallback below.
+  }
+
+  throw new Error('Encrypted image download failed via both storage path and direct URL');
 };
 
 const LOCKED_ENTRY_TITLE = '🔒 Lukittu merkinta';
@@ -167,7 +353,6 @@ const uploadVideoThumbnail = async (
       return undefined;
     }
 
-    console.log('[uploadVideoThumbnail] Generating thumbnail from:', sourceUri);
     const generated = await VideoThumbnails.getThumbnailAsync(sourceUri, {
       time: 0,
       quality: 0.35,
@@ -179,7 +364,6 @@ const uploadVideoThumbnail = async (
     }
 
     generatedThumbnailUri = generated.uri;
-    console.log('[uploadVideoThumbnail] Thumbnail generated:', generatedThumbnailUri);
 
     const filename = `videos/${userId}/thumbnails/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
     const encodedFilename = encodeURIComponent(filename);
@@ -207,7 +391,6 @@ const uploadVideoThumbnail = async (
     }
 
     const thumbnailUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedFilename}?alt=media&token=${downloadToken}`;
-    console.log('[uploadVideoThumbnail] Thumbnail uploaded successfully:', thumbnailUrl);
     return thumbnailUrl;
   } catch (error) {
     console.error('[uploadVideoThumbnail] Error:', error);
@@ -226,25 +409,43 @@ const decryptImageUrlToLocalUri = async (imageUrl: string): Promise<string> => {
 
   try {
     await ensureDecryptedImageCacheDir();
-    const fileName = `${hashString(imageUrl)}.jpg`;
-    const localPath = `${DECRYPTED_IMAGE_CACHE_DIR}${fileName}`;
+    // Versioned cache key to avoid stale files created by older extension logic.
+    const cacheKey = `${hashString(imageUrl)}_v2`;
+    const inMemoryCachedPath = decryptedImagePathCache.get(cacheKey);
+    if (inMemoryCachedPath) {
+      const inMemoryInfo = await FileSystem.getInfoAsync(inMemoryCachedPath);
+      if (inMemoryInfo.exists) {
+        return inMemoryCachedPath;
+      }
+      decryptedImagePathCache.delete(cacheKey);
+    }
+    const possibleExtensions = ['jpg', 'png', 'gif', 'webp', 'heic', 'heif'];
 
-    const cachedInfo = await FileSystem.getInfoAsync(localPath);
-    if (cachedInfo.exists) {
-      return localPath;
+    for (const ext of possibleExtensions) {
+      const cachedPath = `${DECRYPTED_IMAGE_CACHE_DIR}${cacheKey}.${ext}`;
+      const cachedInfo = await FileSystem.getInfoAsync(cachedPath);
+      if (cachedInfo.exists) {
+        decryptedImagePathCache.set(cacheKey, cachedPath);
+        return cachedPath;
+      }
     }
 
-    const response = await fetch(imageUrl);
-    const encryptedBuffer = await response.arrayBuffer();
-    const encryptedBytes = new Uint8Array(encryptedBuffer);
+    const encryptedBytes = await fetchEncryptedImageBytes(imageUrl);
     const decryptedBytes = decryptBytes(encryptedBytes);
+
+    const extension = inferImageExtension(decryptedBytes);
+    const localPath = `${DECRYPTED_IMAGE_CACHE_DIR}${cacheKey}.${extension}`;
 
     await FileSystem.writeAsStringAsync(localPath, encodeBase64(decryptedBytes), {
       encoding: FileSystem.EncodingType.Base64,
     });
+    decryptedImagePathCache.set(cacheKey, localPath);
 
     return localPath;
   } catch (error) {
+    if (__DEV__) {
+      console.warn('[decryptImageUrlToLocalUri] Failed to decrypt image URL:', imageUrl, error);
+    }
     return imageUrl;
   }
 };
@@ -306,15 +507,19 @@ export const uploadImage = async (uri: string, userId: string): Promise<string> 
  * Upload multiple images to Firebase Storage
  */
 export const uploadImages = async (uris: string[], userId: string): Promise<string[]> => {
-  const uploaded: string[] = [];
+  // Lähetetään enintään 3 kuvaa rinnakkain muistinkäytön hallitsemiseksi.
+  const CONCURRENCY = 3;
+  const results: string[] = new Array(uris.length);
 
-  for (let index = 0; index < uris.length; index += 1) {
-    const uri = uris[index];
-    const uploadedUrl = await uploadImage(uri, userId);
-    uploaded.push(uploadedUrl);
+  for (let start = 0; start < uris.length; start += CONCURRENCY) {
+    const batch = uris.slice(start, start + CONCURRENCY);
+    const batchResults = await Promise.all(batch.map((uri) => uploadImage(uri, userId)));
+    for (let i = 0; i < batchResults.length; i++) {
+      results[start + i] = batchResults[i];
+    }
   }
 
-  return uploaded;
+  return results;
 };
 
 /**
@@ -509,6 +714,16 @@ export const updateEntry = async (
 ): Promise<void> => {
   try {
     const entryRef = doc(db, ENTRIES_COLLECTION, id);
+    const needsMediaCleanup =
+      updates.images !== undefined ||
+      updates.videos !== undefined ||
+      updates.videoThumbnails !== undefined;
+
+    let currentData: any = null;
+    if (needsMediaCleanup || updates.images !== undefined) {
+      const currentSnap = await getDoc(entryRef);
+      currentData = currentSnap.exists() ? currentSnap.data() : {};
+    }
 
     // Poista undefined-arvot (Firestore ei hyväksy niitä)
     const cleanedUpdates = Object.fromEntries(
@@ -517,6 +732,25 @@ export const updateEntry = async (
 
     // Salaa päivitettävät tekstikentät
     const encryptedUpdates: any = { ...cleanedUpdates, updatedAt: Timestamp.now() };
+
+    if (updates.images !== undefined) {
+      const nextImages = (updates.images || []).filter((uri) => !isTransientDecryptedImageUri(uri));
+
+      if (nextImages.length === (updates.images || []).length) {
+        encryptedUpdates.images = updates.images;
+      } else {
+        // Do not allow local cache file paths to overwrite persisted image references.
+        if (nextImages.length > 0) {
+          encryptedUpdates.images = nextImages;
+        } else {
+          encryptedUpdates.images = currentData?.images || [];
+        }
+
+        if (__DEV__) {
+          console.warn('[updateEntry] Filtered transient decrypted image URIs from update payload');
+        }
+      }
+    }
     if (updates.title !== undefined) {
       encryptedUpdates.title = encryptText(updates.title);
     }
@@ -556,6 +790,17 @@ export const updateEntry = async (
     });
 
     await updateDoc(entryRef, encryptedUpdates);
+
+    if (needsMediaCleanup) {
+      const previousUrls = getMediaUrlsFromEntryData(currentData || {});
+      const nextUrls = getMediaUrlsFromEntryData({
+        ...currentData,
+        ...encryptedUpdates,
+      });
+      const removedUrls = getRemovedMediaUrls(previousUrls, nextUrls);
+      await deleteMediaUrlsBestEffort(removedUrls);
+    }
+
     debugLog('[updateEntry] Entry updated successfully:', id);
   } catch (error) {
     console.error('[updateEntry] Error updating entry:', error);
@@ -569,7 +814,15 @@ export const updateEntry = async (
 export const deleteEntry = async (id: string): Promise<void> => {
   try {
     const entryRef = doc(db, ENTRIES_COLLECTION, id);
+    const entrySnap = await getDoc(entryRef);
+    const entryData = entrySnap.exists() ? entrySnap.data() : null;
+
     await deleteDoc(entryRef);
+
+    if (entryData) {
+      const mediaUrls = getMediaUrlsFromEntryData(entryData);
+      await deleteMediaUrlsBestEffort(mediaUrls);
+    }
   } catch (error) {
     throw error;
   }

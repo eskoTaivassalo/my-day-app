@@ -11,6 +11,16 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+
+/**
+ * Näyttää ensin kuvan ilman kehystä.
+ * Yksinkertainen kehyskuva preview-näkymään.
+ */
+function FramedPhoto({ uri, style }: { uri: string; style: any }) {
+  return (
+    <Image source={{ uri }} style={style} resizeMode="cover" />
+  );
+}
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -362,7 +372,8 @@ export default function NewEntryScreen({ navigation }: any) {
           <View style={previewStyles.framedContainer}>
             {selectedImages.map((uri, index) => (
               <View key={index} style={previewStyles.framedImageWrapper}>
-                <Image source={{ uri }} style={previewStyles.framedImage} />
+                <FramedPhoto uri={uri} style={previewStyles.framedImage} />
+
               </View>
             ))}
           </View>
@@ -461,9 +472,7 @@ export default function NewEntryScreen({ navigation }: any) {
             }
             return acc;
           }, {} as Record<string, string>);
-          console.log('Video upload complete. Count:', videoUrls.length, 'URLs:', videoUrls);
         } catch (videoError) {
-          console.error('Video upload failed:', videoError);
           throw new Error(`Videoiden lataus epäonnistui: ${videoError}`);
         } finally {
           setUploadProgress(null);
@@ -471,7 +480,7 @@ export default function NewEntryScreen({ navigation }: any) {
       }
 
       // Save entry to Firestore with selected date
-      console.log('Creating entry with videos:', videoUrls.length);
+
       await createEntry(
         {
           title: title.trim(),

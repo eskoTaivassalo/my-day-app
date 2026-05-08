@@ -19,11 +19,11 @@ export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn, signInWithGoogle } = useAuth();
+  const { signIn, sendResetPasswordEmail } = useAuth();
   const { t } = useLanguage();
   const { theme } = useTheme();
   const isDark = theme.id === 'midnight';
-
+  const [showPassword, setShowPassword] = useState(false);
   const handleLogin = async () => {
     if (!email || !password) {
       Alert.alert(t('common_error'), t('common_fill_all_fields'));
@@ -41,14 +41,17 @@ export default function LoginScreen({ navigation }: any) {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setLoading(true);
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      Alert.alert(t('common_error'), t('login_reset_enter_email'));
+      return;
+    }
+
     try {
-      await signInWithGoogle();
+      await sendResetPasswordEmail(email);
+      Alert.alert(t('common_success'), t('login_reset_email_sent'));
     } catch (error: any) {
-      Alert.alert(t('login_google_failed'), error.message);
-    } finally {
-      setLoading(false);
+      Alert.alert(t('common_error'), error.message || t('login_reset_failed'));
     }
   };
 
@@ -85,24 +88,47 @@ export default function LoginScreen({ navigation }: any) {
             autoComplete="email"
           />
 
-          <TextInput
-            style={[
-              styles.input,
-              {
-                backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
-                borderColor: theme.colors.border,
-                color: theme.colors.text,
-                fontFamily: theme.fonts.bodyFamily,
-              },
-            ]}
-            placeholder={t('login_password_placeholder')}
-            placeholderTextColor={theme.colors.textSecondary}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoCapitalize="none"
-            autoComplete="password"
-          />
+
+          <View style={{ position: 'relative' }}>
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  backgroundColor: isDark ? '#0B1220' : theme.colors.backgroundLight,
+                  borderColor: theme.colors.border,
+                  color: theme.colors.text,
+                  fontFamily: theme.fonts.bodyFamily,
+                  paddingRight: 48, // tilaa ikonille
+                },
+              ]}
+              placeholder={t('login_password_placeholder')}
+              placeholderTextColor={theme.colors.textSecondary}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoComplete="password"
+            />
+            <TouchableOpacity
+              onPress={() => setShowPassword((v) => !v)}
+              style={{
+                position: 'absolute',
+                right: 12,
+                top: 0,
+                bottom: 0,
+                justifyContent: 'center',
+                alignItems: 'center',
+                height: '100%',
+                width: 32,
+                zIndex: 10,
+              }}
+              accessibilityLabel={showPassword ? (t('login_hide_password') || 'Piilota salasana') : (t('login_show_password') || 'Näytä salasana')}
+            >
+              <Text style={{ fontSize: 22, color: theme.colors.textSecondary }}>
+                {showPassword ? '🙈' : '👁️'}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity
             style={[styles.button, { backgroundColor: isDark ? theme.colors.primaryDark : theme.colors.primary }, loading && styles.buttonDisabled]}
@@ -116,19 +142,10 @@ export default function LoginScreen({ navigation }: any) {
             )}
           </TouchableOpacity>
 
-          {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={[styles.dividerText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>{t('login_or_divider')}</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Google Sign In */}
-          <TouchableOpacity
-            style={[styles.googleButton, { backgroundColor: theme.colors.white, borderColor: theme.colors.border }]}
-            onPress={handleGoogleSignIn}
-          >
-            <Text style={[styles.googleButtonText, { color: theme.colors.text, fontFamily: theme.fonts.bodyFamily }]}>{t('login_google_button')}</Text>
+          <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordBtn}>
+            <Text style={[styles.forgotPasswordText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>
+              {t('login_forgot_password')}
+            </Text>
           </TouchableOpacity>
 
           {/* Sign Up Link */}
@@ -198,32 +215,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 24,
+  forgotPasswordBtn: {
+    alignSelf: 'flex-end',
+    marginTop: 12,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#d1d5db',
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    color: '#999',
+  forgotPasswordText: {
     fontSize: 14,
-  },
-  googleButton: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  googleButtonText: {
-    color: '#333',
-    fontSize: 16,
     fontWeight: '500',
   },
   footer: {

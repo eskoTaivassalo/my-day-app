@@ -13,7 +13,52 @@ import {
   Pressable,
   Platform,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
+
+/**
+ * Näyttää ensin pelkän kuvan ilman kehystä.
+ * Kun kuva on ladattu, häivyttää puukehyksen (reunat + varjo + väri) näkyviin.
+ */
+function FramedPhoto({ uri, imageStyle }: { uri: string; imageStyle: any }) {
+  const frameAnim = useRef(new Animated.Value(0)).current;
+  const [imageReady, setImageReady] = useState(false);
+
+  const handleLoad = () => {
+    if (imageReady) return;
+    setImageReady(true);
+    Animated.timing(frameAnim, { toValue: 1, duration: 350, useNativeDriver: false }).start();
+  };
+
+  const borderColorAnim = frameAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['transparent', '#654321'],
+  });
+
+  return (
+    <Animated.View
+      style={{
+        padding: 16,
+        borderRadius: 4,
+        borderWidth: 3,
+        borderColor: borderColorAnim,
+        backgroundColor: imageReady ? '#8B4513' : 'transparent',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: imageReady ? 0.3 : 0,
+        shadowRadius: 8,
+        elevation: imageReady ? 8 : 0,
+      }}
+    >
+      <Image
+        source={{ uri }}
+        style={[imageStyle, { borderWidth: 2, borderColor: imageReady ? '#DEB887' : 'transparent' }]}
+        resizeMode="cover"
+        onLoad={handleLoad}
+      />
+    </Animated.View>
+  );
+}
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -67,10 +112,12 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const [entry, setEntry] = useState<DiaryEntry>(normalizedEntry);
+  const [entryImageRefs, setEntryImageRefs] = useState<string[]>(normalizedEntry.images || []);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState(entry.title);
   const [editedContent, setEditedContent] = useState(entry.content);
   const [editedImages, setEditedImages] = useState<string[]>(entry.images);
+  const [editedImageRefs, setEditedImageRefs] = useState<string[]>(normalizedEntry.images || []);
   const [editedVideos, setEditedVideos] = useState<string[]>(entry.videos || []);
   const [editedVideoThumbnails, setEditedVideoThumbnails] = useState<Record<string, string>>(entry.videoThumbnails || {});
   const [editedDate, setEditedDate] = useState(entry.date);
@@ -256,7 +303,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       await updateEntry(entry.id, {
         title: editedTitle.trim(),
         content: editedContent.trim(),
-        images: editedImages,
+        images: editedImageRefs,
         videos: editedVideos,
         videoThumbnails: editedVideoThumbnails,
         layout: layout,
@@ -275,6 +322,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         date: editedDate,
         location: editedLocation || undefined,
       });
+      setEntryImageRefs(editedImageRefs);
       
       setIsEditing(false);
       Alert.alert(t('entry_saved'), t('entry_changes_saved'));
@@ -289,6 +337,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
     setEditedTitle(entry.title);
     setEditedContent(entry.content);
     setEditedImages(entry.images);
+    setEditedImageRefs(entryImageRefs);
     setEditedVideos(entry.videos || []);
     setEditedVideoThumbnails(entry.videoThumbnails || {});
     setEditedDate(entry.date);
@@ -374,6 +423,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         const newImageUris = result.assets.map((asset) => asset.uri);
         const uploadedUrls = await uploadImages(newImageUris, user.uid);
         setEditedImages((prev) => [...prev, ...uploadedUrls]);
+        setEditedImageRefs((prev) => [...prev, ...uploadedUrls]);
       } catch (error) {
         Alert.alert(t('common_error'), t('entry_images_failed'));
       } finally {
@@ -383,7 +433,15 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const removeImage = (uri: string) => {
-    setEditedImages((prev) => prev.filter((img) => img !== uri));
+    setEditedImages((prevImages) => {
+      const removeIndex = prevImages.indexOf(uri);
+      if (removeIndex === -1) {
+        return prevImages;
+      }
+
+      setEditedImageRefs((prevRefs) => prevRefs.filter((_, index) => index !== removeIndex));
+      return prevImages.filter((_, index) => index !== removeIndex);
+    });
   };
 
   const pickVideo = async () => {
@@ -666,9 +724,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
                 onPress={() => handleImagePress(uri)}
                 activeOpacity={0.9}
               >
-                <View style={styles.woodFrame}>
-                  <Image source={{ uri }} style={styles.framedImage} resizeMode="cover" />
-                </View>
+                <FramedPhoto uri={uri} imageStyle={styles.framedImage} />
                 {isEditing && (
                   <TouchableOpacity
                     style={styles.removeImageButton}

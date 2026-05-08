@@ -112,6 +112,14 @@ export default function RegisterScreen({ navigation }: any) {
               keyboardType="email-address"
               autoComplete="email"
             />
+            <Text
+              style={[
+                styles.emailHint,
+                { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily },
+              ]}
+            >
+              {t('register_email_recommendation')}
+            </Text>
 
             <TextInput
               style={[
@@ -255,6 +263,12 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#e0e0e0',
+  },
+  emailHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: -6,
+    marginBottom: 14,
   },
   button: {
     backgroundColor: '#007AFF',

@@ -40,11 +40,19 @@ export default function CalendarScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const loadRequestIdRef = useRef(0);
   const loadInFlightRef = useRef(false);
+  const hasLoadedRef = useRef(false);
+  const lastFocusRefreshAtRef = useRef(0);
+  const FOCUS_REFRESH_MIN_INTERVAL_MS = 30_000;
 
-  const loadEntries = useCallback(async () => {
+  const loadEntries = useCallback(async (force = false) => {
     if (!user) return;
+    const now = Date.now();
+    if (!force && hasLoadedRef.current && now - lastFocusRefreshAtRef.current < FOCUS_REFRESH_MIN_INTERVAL_MS) {
+      return;
+    }
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
+    lastFocusRefreshAtRef.current = now;
     const requestId = ++loadRequestIdRef.current;
     
     try {
@@ -56,6 +64,7 @@ export default function CalendarScreen({ navigation }: any) {
       if (requestId === loadRequestIdRef.current) {
         setEntries(fetchedEntries);
         setDocuments(fetchedDocuments);
+        hasLoadedRef.current = true;
       }
     } catch {
     } finally {

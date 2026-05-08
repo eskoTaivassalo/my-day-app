@@ -23,7 +23,7 @@ import { colors, spacing, borderRadius, typography, shadows, commonStyles } from
 import { calculateStreaks } from '../utils/achievementUtils';
 
 export default function ProfileScreen({ navigation }: any) {
-  const { user, logout, deleteAccount } = useAuth();
+  const { user, logout, deleteAccount, changePassword } = useAuth();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
   const locale = getLocaleFromLanguage(language);
@@ -33,6 +33,11 @@ export default function ProfileScreen({ navigation }: any) {
   const [showDeletePasswordModal, setShowDeletePasswordModal] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
   const achievementsNavigationAtRef = useRef(0);
   const [stats, setStats] = useState({
     totalEntries: 0,
@@ -107,6 +112,38 @@ export default function ProfileScreen({ navigation }: any) {
         },
       ]
     );
+  };
+
+  const handleChangePassword = async () => {
+    if (!newPassword.trim() || !currentPassword.trim()) return;
+    if (newPassword !== confirmNewPassword) {
+      Alert.alert(t('common_error'), t('profile_change_password_mismatch'));
+      return;
+    }
+    if (newPassword.length < 6) {
+      Alert.alert(t('common_error'), t('profile_change_password_too_short'));
+      return;
+    }
+    try {
+      setChangingPassword(true);
+      await changePassword(currentPassword, newPassword);
+      setShowChangePasswordModal(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      Alert.alert(t('common_success'), t('profile_change_password_success'));
+      // Pakotettu uloskirjautuminen ja siirto LoginScreeniin
+      await logout();
+    } catch (error: any) {
+      const code = error?.code;
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        Alert.alert(t('common_error'), t('profile_change_password_wrong_current'));
+      } else {
+        Alert.alert(t('common_error'), error?.message || t('profile_change_password_failed'));
+      }
+    } finally {
+      setChangingPassword(false);
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -338,6 +375,18 @@ export default function ProfileScreen({ navigation }: any) {
 
         {/* Actions */}
         <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={[styles.logoutButton, { marginBottom: spacing.sm }]}
+            onPress={() => {
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmNewPassword('');
+              setShowChangePasswordModal(true);
+            }}
+          >
+            <Text style={styles.logoutText}>{t('profile_change_password_button')}</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
             <Text style={styles.logoutText}>{t('profile_logout')}</Text>
           </TouchableOpacity>
@@ -353,6 +402,84 @@ export default function ProfileScreen({ navigation }: any) {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Change Password Modal */}
+      <Modal
+        visible={showChangePasswordModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!changingPassword) setShowChangePasswordModal(false);
+        }}
+      >
+        <View style={styles.deleteModalBackdrop}>
+          <View style={[styles.deleteModalCard, themed.modalBg]}>
+            <Text style={[styles.deleteModalTitle, themed.primaryText]}>{t('profile_change_password_title')}</Text>
+            <Text style={[styles.deleteModalText, themed.secondaryText]}>
+              {t('profile_change_password_body')}
+            </Text>
+
+            <TextInput
+              style={[styles.deletePasswordInput, themed.inputBg]}
+              placeholder={t('profile_change_password_current')}
+              placeholderTextColor={themed.inputPlaceholder}
+              secureTextEntry
+              editable={!changingPassword}
+              value={currentPassword}
+              onChangeText={setCurrentPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TextInput
+              style={[styles.deletePasswordInput, themed.inputBg]}
+              placeholder={t('profile_change_password_new')}
+              placeholderTextColor={themed.inputPlaceholder}
+              secureTextEntry
+              editable={!changingPassword}
+              value={newPassword}
+              onChangeText={setNewPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TextInput
+              style={[styles.deletePasswordInput, themed.inputBg]}
+              placeholder={t('profile_change_password_confirm')}
+              placeholderTextColor={themed.inputPlaceholder}
+              secureTextEntry
+              editable={!changingPassword}
+              value={confirmNewPassword}
+              onChangeText={setConfirmNewPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity
+                style={[styles.deleteModalButton, styles.deleteModalCancelButton]}
+                onPress={() => { if (!changingPassword) setShowChangePasswordModal(false); }}
+                disabled={changingPassword}
+              >
+                <Text style={[styles.deleteModalCancelText, themed.primaryText]}>{t('common_cancel')}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.deleteModalButton,
+                  styles.deleteModalDeleteButton,
+                  (!currentPassword.trim() || !newPassword.trim() || !confirmNewPassword.trim() || changingPassword) &&
+                    styles.deleteModalDeleteButtonDisabled,
+                ]}
+                onPress={handleChangePassword}
+                disabled={!currentPassword.trim() || !newPassword.trim() || !confirmNewPassword.trim() || changingPassword}
+              >
+                <Text style={styles.deleteModalDeleteText}>
+                  {changingPassword ? t('common_saving') : t('profile_change_password_save')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={showDeletePasswordModal}

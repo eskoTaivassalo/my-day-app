@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   Animated,
-  Easing,
   FlatList,
   ScrollView,
   TouchableOpacity,
@@ -53,112 +52,22 @@ import {
   Achievement,
   Stats,
 } from '../utils/achievementUtils';
-
+declare var global: any;
 const { width } = Dimensions.get('window');
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
-const INITIAL_ENTRIES_LIMIT = Platform.OS === 'android' ? 40 : 60;
-const INITIAL_MEDIA_RESOLVE_LIMIT = Platform.OS === 'android' ? 12 : 24;
-const FOCUS_REFRESH_MIN_INTERVAL_MS = 30000;
-const GREETING_VARIANT_COUNT = 100;
-
-const GREETING_OPENERS = {
-  fi: [
-    'Huippua paivaa,',
-    'Kiva nahda sinut,',
-    'Tanaan on sinun paivasi,',
-    'Ihana kun palasit,',
-    'Tervetuloa takaisin,',
-    'Nyt lahtee lempeasti,',
-    'Hyva rytmi jatkuu,',
-    'Olet oikeassa paikassa,',
-    'Pieni askel, iso fiilis,',
-    'Sinussa on valoa,',
-  ],
-  en: [
-    'Great to see you,',
-    'Welcome back,',
-    'This day is yours,',
-    'You are doing amazing,',
-    'Your story continues,',
-    'A fresh page awaits,',
-    'You are in the zone,',
-    'Keep your momentum,',
-    'A calm start for you,',
-    'Today looks bright,',
-  ],
-  sv: [
-    'Harligt att se dig,',
-    'Valkommen tillbaka,',
-    'Den har dagen ar din,',
-    'Du gor det jattebra,',
-    'Din resa fortsatter,',
-    'En ny sida vantar,',
-    'Du ar i flyt idag,',
-    'Fortsatt i din takt,',
-    'En lugn start for dig,',
-    'Idag ser lovande ut,',
-  ],
-} as const;
-
-const GREETING_ENDINGS = {
-  fi: [
-    'Kirjoita yksi ajatus talteen.',
-    'Yksi merkinta riittaa taman paivan voittoon.',
-    'Anna tunteille tilaa ja sana kerrallaan eteenpain.',
-    'Sinun tarinasi ansaitsee tulla kuulluksi.',
-    'Nyt on hyva hetki pysahtya hetkeksi.',
-    'Pieni teksti voi tehda ison eron.',
-    'Lampo ja rohkeus mukana tanaankin.',
-    'Olet jo hyvassa vauhdissa.',
-    'Jatka juuri omalla tavallasi.',
-    'Tasta tulee hyva paiva muistettavaksi.',
-  ],
-  en: [
-    'Capture one thought and make it yours.',
-    'One short entry is a great win today.',
-    'Give your feelings room, one line at a time.',
-    'Your story deserves to be heard.',
-    'This is a good moment to pause and breathe.',
-    'A tiny note can change the whole day.',
-    'Bring warmth and courage into this moment.',
-    'You are already moving in the right direction.',
-    'Keep going in your own way.',
-    'This can become a beautiful memory.',
-  ],
-  sv: [
-    'Skriv ner en tanke och gor den till din.',
-    'En kort anteckning ar en fin vinst idag.',
-    'Ge kanslorna plats, en rad i taget.',
-    'Din berattelse fortjanar att bli hord.',
-    'Det ar ett bra tillfalle att stanna upp.',
-    'En liten notis kan forandra hela dagen.',
-    'Ta med varme och mod in i stunden.',
-    'Du ar redan pa ratt vag.',
-    'Fortsatt precis pa ditt satt.',
-    'Det har kan bli ett fint minne.',
-  ],
-} as const;
-
-const getLanguageKey = (language: string): 'fi' | 'en' | 'sv' => {
-  if (language === 'en') return 'en';
-  if (language === 'sv') return 'sv';
-  return 'fi';
-};
-
-const buildGreetingBank = (language: string, name: string): string[] => {
-  const languageKey = getLanguageKey(language);
-  const openers = GREETING_OPENERS[languageKey];
-  const endings = GREETING_ENDINGS[languageKey];
-  const bank: string[] = [];
-
-  for (let row = 0; row < openers.length; row += 1) {
-    for (let col = 0; col < endings.length; col += 1) {
-      bank.push(`${openers[row]} ${name}. ${endings[col]}`);
-    }
-  }
-
-  return bank;
-};
+const INITIAL_ENTRIES_LIMIT = 60;
+const INITIAL_MEDIA_RESOLVE_LIMIT = 24;
+const GREETING_BANK_SIZE = 8;
+const GREETING_KEYS = [
+  'timeline_greeting_bank_1',
+  'timeline_greeting_bank_2',
+  'timeline_greeting_bank_3',
+  'timeline_greeting_bank_4',
+  'timeline_greeting_bank_5',
+  'timeline_greeting_bank_6',
+  'timeline_greeting_bank_7',
+  'timeline_greeting_bank_8',
+] as const;
 
 export default function TimelineScreen({ navigation }: any) {
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
@@ -189,22 +98,17 @@ export default function TimelineScreen({ navigation }: any) {
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<number[]>([]);
   const [achievementsLoaded, setAchievementsLoaded] = useState(false);
   const [showGreetingCard, setShowGreetingCard] = useState(true);
-  const [greetingVariantIndex, setGreetingVariantIndex] = useState(0);
   const [videoThumbnailMap, setVideoThumbnailMap] = useState<Record<string, string>>({});
-  const { user } = useAuth();
+  const { user, encryptionStatus } = useAuth();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
   const locale = getLocaleFromLanguage(language);
   
   // Muista viimeiset tilastot joista näytettiin toast
   const lastProcessedStats = useRef<Stats | null>(null);
+  const achievementBaselineHydratedRef = useRef(false);
   const entriesLoadInFlightRef = useRef(false);
-  const achievementsNavigationAtRef = useRef(0);
-  const hasLoadedTimelineRef = useRef(false);
-  const lastFocusRefreshAtRef = useRef(0);
-  const greetingOpacityAnim = useRef(new Animated.Value(0)).current;
-  const greetingTranslateAnim = useRef(new Animated.Value(14)).current;
-  const greetingScaleAnim = useRef(new Animated.Value(0.9)).current;
+  const greetingAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const isFabric = Boolean((global as any).nativeFabricUIManager);
@@ -215,6 +119,8 @@ export default function TimelineScreen({ navigation }: any) {
 
   useEffect(() => {
     setAchievementsLoaded(false);
+    lastProcessedStats.current = null;
+    achievementBaselineHydratedRef.current = false;
   }, [user?.uid]);
 
   const setThumbnailForEntry = (entryId: string, thumbnailUri: string | null | undefined) => {
@@ -259,43 +165,34 @@ export default function TimelineScreen({ navigation }: any) {
     return user?.displayName?.trim() || emailNameFallback || t('profile_user_fallback');
   }, [t, user?.displayName, user?.email]);
 
-  useEffect(() => {
-    setGreetingVariantIndex(Math.floor(Math.random() * GREETING_VARIANT_COUNT));
-  }, [language, user?.uid]);
+  const dailyGreetingSeed = useMemo(() => {
+    const dayKey = getTodayDateKey();
+    const source = `${dayKey}|${user?.uid ?? 'anon'}`;
+    let hash = 0;
 
-  const greetingBank = useMemo(
-    () => buildGreetingBank(language, timelineDisplayName),
-    [language, timelineDisplayName]
+    for (let index = 0; index < source.length; index += 1) {
+      hash = (hash << 5) - hash + source.charCodeAt(index);
+      hash |= 0;
+    }
+
+    return Math.abs(hash);
+  }, [user?.uid]);
+
+  const greetingIndex = useMemo(
+    () => (dailyGreetingSeed % GREETING_BANK_SIZE) + 1,
+    [dailyGreetingSeed]
   );
 
   const dailyGreetingText = useMemo(
-    () => greetingBank[greetingVariantIndex % greetingBank.length] || '',
-    [greetingBank, greetingVariantIndex]
+    () =>
+      t(GREETING_KEYS[greetingIndex - 1], {
+        name: timelineDisplayName,
+      }),
+    [greetingIndex, t, timelineDisplayName]
   );
 
-  const openAchievements = () => {
-    const now = Date.now();
-    if (now - achievementsNavigationAtRef.current < 700) {
-      return;
-    }
-
-    achievementsNavigationAtRef.current = now;
-    navigation.navigate('Achievements');
-  };
-
-  const greetingPalette = useMemo(() => {
-    const hue = (greetingVariantIndex * 47) % 360;
-    const secondaryHue = (hue + 28) % 360;
-
-    return {
-      backgroundColor: `hsl(${hue}, 100%, 94%)`,
-      borderColor: `hsl(${hue}, 78%, 54%)`,
-      accentColor: `hsl(${secondaryHue}, 72%, 34%)`,
-    };
-  }, [greetingVariantIndex]);
-
   const greetingStyleVariant = useMemo(() => {
-    const variant = (greetingVariantIndex % 4) + 1;
+    const variant = (dailyGreetingSeed % 4) + 1;
 
     switch (variant) {
       case 1:
@@ -303,113 +200,60 @@ export default function TimelineScreen({ navigation }: any) {
           fontFamily: theme.fonts.headingFamily,
           fontStyle: 'normal' as const,
           letterSpacing: 0.2,
-          color: greetingPalette.accentColor,
+          color: theme.colors.text,
         };
       case 2:
         return {
-          fontFamily: theme.fonts.bodyFamily,
-          fontStyle: 'normal' as const,
+          fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+          fontStyle: 'italic' as const,
           letterSpacing: 0.4,
-          color: greetingPalette.accentColor,
+          color: theme.colors.primary,
         };
       case 3:
         return {
           fontFamily: theme.fonts.bodyFamily,
           fontStyle: 'normal' as const,
           letterSpacing: 0.8,
-          color: greetingPalette.accentColor,
+          color: theme.colors.text,
         };
       default:
         return {
           fontFamily: Platform.OS === 'ios' ? 'AvenirNext-DemiBold' : theme.fonts.headingFamily,
           fontStyle: 'normal' as const,
           letterSpacing: 0.1,
-          color: greetingPalette.accentColor,
+          color: theme.colors.secondary,
         };
     }
-  }, [greetingPalette.accentColor, greetingVariantIndex, theme.fonts.bodyFamily, theme.fonts.headingFamily]);
-
-  const greetingVisibleDurationMs = useMemo(() => {
-    const chars = dailyGreetingText.trim().length;
-    const baseMs = 1700;
-    const perCharMs = 24;
-    const minMs = 2200;
-    const maxMs = 5200;
-
-    return Math.max(minMs, Math.min(maxMs, baseMs + chars * perCharMs));
-  }, [dailyGreetingText]);
+  }, [dailyGreetingSeed, theme.colors.primary, theme.colors.secondary, theme.colors.text, theme.fonts.bodyFamily, theme.fonts.headingFamily]);
 
   useEffect(() => {
     setShowGreetingCard(true);
-    greetingOpacityAnim.setValue(0);
-    greetingTranslateAnim.setValue(28);
-    greetingScaleAnim.setValue(0.9);
+    greetingAnim.setValue(0);
 
     const animation = Animated.sequence([
-      Animated.parallel([
-        Animated.timing(greetingOpacityAnim, {
-          toValue: 1,
-          duration: 700,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(greetingTranslateAnim, {
-          toValue: -4,
-          duration: 760,
-          easing: Easing.out(Easing.back(1.1)),
-          useNativeDriver: true,
-        }),
-        Animated.timing(greetingScaleAnim, {
-          toValue: 1.04,
-          duration: 760,
-          easing: Easing.out(Easing.back(1.05)),
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.parallel([
-        Animated.timing(greetingTranslateAnim, {
-          toValue: 0,
-          duration: 240,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(greetingScaleAnim, {
-          toValue: 1,
-          duration: 240,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.delay(greetingVisibleDurationMs),
-      Animated.parallel([
-        Animated.timing(greetingOpacityAnim, {
-          toValue: 0,
-          duration: 1800,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(greetingTranslateAnim, {
-          toValue: -10,
-          duration: 1800,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
+      Animated.timing(greetingAnim, {
+        toValue: 1,
+        duration: 320,
+        useNativeDriver: true,
+      }),
+      Animated.delay(2200),
+      Animated.timing(greetingAnim, {
+        toValue: 0,
+        duration: 320,
+        useNativeDriver: true,
+      }),
     ]);
 
-    const rafId = requestAnimationFrame(() => {
-      animation.start(({ finished }) => {
-        if (finished) {
-          setShowGreetingCard(false);
-        }
-      });
+    animation.start(({ finished }) => {
+      if (finished) {
+        setShowGreetingCard(false);
+      }
     });
 
     return () => {
-      cancelAnimationFrame(rafId);
       animation.stop();
     };
-  }, [dailyGreetingText, greetingOpacityAnim, greetingScaleAnim, greetingTranslateAnim, greetingVisibleDurationMs]);
+  }, [dailyGreetingText, greetingAnim]);
 
   const themed = useMemo(
     () => ({
@@ -437,34 +281,16 @@ export default function TimelineScreen({ navigation }: any) {
   // Ladataan entryt uudelleen kun palataan tähän screeniin
   useFocusEffect(
     React.useCallback(() => {
-      if (!user) {
-        return;
-      }
-
-      const task = InteractionManager.runAfterInteractions(() => {
-        const now = Date.now();
-        const shouldRefresh = !hasLoadedTimelineRef.current || now - lastFocusRefreshAtRef.current >= FOCUS_REFRESH_MIN_INTERVAL_MS;
-
-        void loadUserProfile();
-
-        if (!shouldRefresh) {
-          return;
-        }
-
-        lastFocusRefreshAtRef.current = now;
-
+      if (user && encryptionStatus === 'ready') {
+        // Lataa saavutukset ensin, sitten entries
         loadUnlockedAchievements().then((ids) => {
-          loadEntries(ids, { showLoading: entries.length === 0 }).then(() => {
-            hasLoadedTimelineRef.current = true;
+          loadEntries(ids).then(() => {
             maybeShowTodayReminders({ ignoreLastShown: true });
           });
         });
-      });
-
-      return () => {
-        task.cancel();
-      };
-    }, [user, entries.length])
+        loadUserProfile();
+      }
+    }, [user, encryptionStatus])
   );
 
   const loadUnlockedAchievements = async (): Promise<number[]> => {
@@ -493,8 +319,8 @@ export default function TimelineScreen({ navigation }: any) {
     }
   };
 
-  const loadEntries = async (unlockedIds?: number[], options?: { showLoading?: boolean }) => {
-    if (!user) return;
+  const loadEntries = async (unlockedIds?: number[]) => {
+    if (!user || encryptionStatus !== 'ready') return;
 
     // Estä päällekkäiset lataukset (esim. focus + strict mode -tuplakutsu)
     if (entriesLoadInFlightRef.current) {
@@ -504,12 +330,9 @@ export default function TimelineScreen({ navigation }: any) {
     
     // Use provided IDs or fall back to state (for refresh scenarios)
     const previouslyUnlockedIds = unlockedIds !== undefined ? unlockedIds : unlockedAchievementIds;
-    const showLoading = options?.showLoading ?? entries.length === 0;
     
     try {
-      if (showLoading) {
-        setEntriesLoading(true);
-      }
+      setEntriesLoading(true);
       const userEntries = await getEntriesFast(user.uid, INITIAL_ENTRIES_LIMIT);
 
       // Delay heavy media processing and only process initially visible items.
@@ -520,7 +343,6 @@ export default function TimelineScreen({ navigation }: any) {
       // Näytä lista heti (älä odota saavutusten tallennuksia)
       setEntries(userEntries);
       setEntriesLoading(false);
-      hasLoadedTimelineRef.current = true;
       
       // Calculate new stats
       const newStats = calculateStats(userEntries);
@@ -545,10 +367,11 @@ export default function TimelineScreen({ navigation }: any) {
       
       const allStatsAchievements = checkNewAchievements(oldStats, newStats);
       
-      // Sync all achievements that are new according to stats but missing from AsyncStorage
-      const achievementsToSync = achievementsLoaded
-        ? allStatsAchievements.filter((achievement) => !previouslyUnlockedIds.includes(achievement.id))
-        : [];
+      // Sync all achievements that are new according to stats but missing from AsyncStorage.
+      // Rely on the loaded ID list passed into this call instead of a possibly stale state flag.
+      const achievementsToSync = allStatsAchievements.filter(
+        (achievement) => !previouslyUnlockedIds.includes(achievement.id)
+      );
       
       if (achievementsToSync.length > 0 && user) {
         // Tallenna saavutukset rinnakkain taustalla (ei blokata renderöintiä)
@@ -563,23 +386,27 @@ export default function TimelineScreen({ navigation }: any) {
           return Array.from(new Set([...prev, ...nextIds]));
         });
 
-        // Show toast for the first new achievement
-        setAchievementToast(achievementsToSync[0]);
-        setShowToast(true);
+        // Avoid showing legacy achievements on initial login hydration.
+        if (achievementBaselineHydratedRef.current) {
+          // Show toast for the first new achievement
+          setAchievementToast(achievementsToSync[0]);
+          setShowToast(true);
 
-        // If there are multiple achievements, show them one by one
-        if (achievementsToSync.length > 1) {
-          for (let i = 1; i < Math.min(3, achievementsToSync.length); i++) {
-            setTimeout(() => {
-              setAchievementToast(achievementsToSync[i]);
-              setShowToast(true);
-            }, i * 5500); // 5.5 second delay between each toast
+          // If there are multiple achievements, show them one by one
+          if (achievementsToSync.length > 1) {
+            for (let i = 1; i < Math.min(3, achievementsToSync.length); i++) {
+              setTimeout(() => {
+                setAchievementToast(achievementsToSync[i]);
+                setShowToast(true);
+              }, i * 5500); // 5.5 second delay between each toast
+            }
           }
         }
       }
       
       // Always update the ref to current stats, so next load won't show achievements again
       lastProcessedStats.current = newStats;
+      achievementBaselineHydratedRef.current = true;
       setStats(newStats);
 
       // Puretaan kuvat taustalla (ei blokata ensimmäistä renderiä)
@@ -1240,6 +1067,35 @@ export default function TimelineScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
 
+        {showGreetingCard && (
+          <Animated.View
+            style={[
+              styles.dailyGreetingCard,
+              {
+                backgroundColor: theme.colors.backgroundLight,
+                borderColor: theme.colors.border,
+                opacity: greetingAnim,
+                transform: [
+                  {
+                    translateY: greetingAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [8, 0],
+                    }),
+                  },
+                  {
+                    scale: greetingAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.98, 1],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <Text style={[styles.dailyGreetingText, greetingStyleVariant]}>{dailyGreetingText}</Text>
+          </Animated.View>
+        )}
+        
         {/* Search Input - Toggleable */}
         {showSearch && (
           <View style={[styles.searchInputContainer, themed.searchBg, themed.searchBorder]}>
@@ -1269,7 +1125,7 @@ export default function TimelineScreen({ navigation }: any) {
       <View style={styles.achievementsContainer}>
         <View style={styles.achievementsRowHeader}>
           <Text style={[styles.achievementsRowTitle, themed.primaryText]}>Seuraavat tavoitteet</Text>
-          <TouchableOpacity onPress={openAchievements}>
+          <TouchableOpacity onPress={() => navigation.navigate('Achievements')}>
             <Text style={[styles.achievementsRowAction, themed.linkText]}>Nayta kaikki</Text>
           </TouchableOpacity>
         </View>
@@ -1285,7 +1141,7 @@ export default function TimelineScreen({ navigation }: any) {
               key={achievement.id}
               style={[styles.achievementCard, styles.achievementCardLocked, themed.cardBg]}
               activeOpacity={0.85}
-              onPress={openAchievements}
+              onPress={() => navigation.navigate('Achievements')}
             >
               <Text style={[styles.achievementCardIcon, styles.achievementCardIconLocked]}>
                 {achievement.icon}
@@ -1315,36 +1171,13 @@ export default function TimelineScreen({ navigation }: any) {
 
       </View>
 
-      {showGreetingCard && (
-        <View style={styles.greetingBannerHost} pointerEvents="none">
-          <Animated.View
-            style={[
-              styles.dailyGreetingCard,
-              {
-                backgroundColor: greetingPalette.backgroundColor,
-                borderColor: greetingPalette.borderColor,
-                opacity: greetingOpacityAnim,
-                transform: [{ translateY: greetingTranslateAnim }, { scale: greetingScaleAnim }],
-              },
-            ]}
-          >
-            <Text style={[styles.dailyGreetingText, greetingStyleVariant]}>{dailyGreetingText}</Text>
-          </Animated.View>
-        </View>
-      )}
-
       {/* Entries List */}
       <FlatList
         data={filteredEntries}
         renderItem={renderEntry}
         keyExtractor={(item) => item.id}
         extraData={videoThumbnailMap}
-        // Virtualization tuning for smoother fast scrolling, especially on lower-end devices.
-        initialNumToRender={8}
-        maxToRenderPerBatch={6}
-        updateCellsBatchingPeriod={60}
-        windowSize={7}
-        removeClippedSubviews={Platform.OS === 'android'}
+        removeClippedSubviews={false}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl 
@@ -1429,25 +1262,16 @@ const styles = StyleSheet.create({
     ...commonStyles.bodySecondary,
   },
   dailyGreetingCard: {
-    width: '100%',
-    maxWidth: 360,
-    marginBottom: spacing.md,
+    marginTop: spacing.sm,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.xl,
-    borderWidth: 2,
-    ...shadows.sm,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
   },
   dailyGreetingText: {
     fontSize: typography.fontSizes.lg,
     lineHeight: 28,
     fontWeight: typography.fontWeights.semibold,
-  },
-  greetingBannerHost: {
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-    alignItems: 'center',
   },
   searchIconButton: {
     width: 40,
