@@ -1124,9 +1124,9 @@ export default function TimelineScreen({ navigation }: any) {
       {/* Achievements Section */}
       <View style={styles.achievementsContainer}>
         <View style={styles.achievementsRowHeader}>
-          <Text style={[styles.achievementsRowTitle, themed.primaryText]}>Seuraavat tavoitteet</Text>
+          <Text style={[styles.achievementsRowTitle, themed.primaryText]}>{t('timeline_goals_next')}</Text>
           <TouchableOpacity onPress={() => navigation.navigate('Achievements')}>
-            <Text style={[styles.achievementsRowAction, themed.linkText]}>Nayta kaikki</Text>
+            <Text style={[styles.achievementsRowAction, themed.linkText]}>{t('timeline_show_all')}</Text>
           </TouchableOpacity>
         </View>
 

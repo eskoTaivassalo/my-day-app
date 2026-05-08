@@ -422,7 +422,19 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
       try {
         const newImageUris = result.assets.map((asset) => asset.uri);
         const uploadedUrls = await uploadImages(newImageUris, user.uid);
-        setEditedImages((prev) => [...prev, ...uploadedUrls]);
+        let previewUris = uploadedUrls;
+
+        try {
+          const resolved = await resolveEntryMediaUris({
+            ...entry,
+            images: uploadedUrls,
+          });
+          previewUris = resolved.images || uploadedUrls;
+        } catch {
+          // Fallback to original refs if preview URI resolution fails.
+        }
+
+        setEditedImages((prev) => [...prev, ...previewUris]);
         setEditedImageRefs((prev) => [...prev, ...uploadedUrls]);
       } catch (error) {
         Alert.alert(t('common_error'), t('entry_images_failed'));
