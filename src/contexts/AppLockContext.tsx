@@ -21,6 +21,7 @@ interface AppLockContextType {
   disablePin: () => Promise<void>;
   enableBiometrics: (enabled: boolean) => Promise<void>;
   lockNow: () => void;
+  suppressNextBackgroundLock: (durationMs?: number) => void;
 }
 
 const AppLockContext = createContext<AppLockContextType | undefined>(undefined);
@@ -32,9 +33,12 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
   const [biometricsAvailable, setBiometricsAvailable] = useState(false);
   const appState = useRef<AppStateStatus>(AppState.currentState);
   const backgroundedAt = useRef<number | null>(null);
+  const suppressLockUntil = useRef<number | null>(null);
 
   // Background grace period: 15 seconds — shorter = more secure
   const LOCK_AFTER_BACKGROUND_MS = 15_000;
+  // External camera/gallery sessions may keep app in background for a long time.
+  const EXTERNAL_FLOW_MAX_GRACE_MS = 2 * 60 * 60 * 1000;
 
   useEffect(() => {
     const init = async () => {
@@ -71,10 +75,17 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
       if (nextState === 'active' && appState.current !== 'active') {
         if (pinEnabled && backgroundedAt.current !== null) {
           const elapsed = Date.now() - backgroundedAt.current;
+          const shouldSuppressLock =
+            suppressLockUntil.current !== null && Date.now() <= suppressLockUntil.current;
+
           if (elapsed > LOCK_AFTER_BACKGROUND_MS) {
-            setIsLocked(true);
-            if (biometricsEnabled && biometricsAvailable) {
-              setTimeout(() => attemptBiometricsQuietly(), 300);
+            if (shouldSuppressLock) {
+              suppressLockUntil.current = null;
+            } else {
+              setIsLocked(true);
+              if (biometricsEnabled && biometricsAvailable) {
+                setTimeout(() => attemptBiometricsQuietly(), 300);
+              }
             }
           }
           backgroundedAt.current = null;
@@ -146,6 +157,12 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
     if (pinEnabled) setIsLocked(true);
   }, [pinEnabled]);
 
+  const suppressNextBackgroundLock = useCallback((durationMs?: number) => {
+    const requestedDuration = durationMs ?? EXTERNAL_FLOW_MAX_GRACE_MS;
+    const safeDuration = Math.max(0, Math.min(requestedDuration, EXTERNAL_FLOW_MAX_GRACE_MS));
+    suppressLockUntil.current = Date.now() + safeDuration;
+  }, []);
+
   return (
     <AppLockContext.Provider value={{
       isLocked,
@@ -158,6 +175,7 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
       disablePin,
       enableBiometrics,
       lockNow,
+      suppressNextBackgroundLock,
     }}>
       {children}
     </AppLockContext.Provider>

@@ -13,6 +13,7 @@ import {
 import * as FileSystem from 'expo-file-system/legacy';
 import { auth, db } from './firebase';
 import { Document } from '../types/Document';
+import { DOCUMENT_CATEGORIES } from '../types/Document';
 import { encodeBase64, decodeBase64 } from 'tweetnacl-util';
 import { encryptText, decryptText, encryptBytes, decryptBytes } from './encryptionService';
 
@@ -36,6 +37,18 @@ const decryptTags = (tags: unknown): string[] => {
   return tags
     .filter((tag): tag is string => typeof tag === 'string')
     .map((tag) => safeDecryptText(tag));
+};
+
+const normalizeDocumentCategory = (category: unknown): Document['category'] => {
+  if (typeof category !== 'string') {
+    return 'other';
+  }
+
+  if (category in DOCUMENT_CATEGORIES) {
+    return category as Document['category'];
+  }
+
+  return 'other';
 };
 
 const ensureDecryptedDocumentCacheDir = async (): Promise<void> => {
@@ -82,6 +95,7 @@ const mapSnapshotToDocument = (id: string, data: any): Document => {
     ? data._encryptionVersion
     : 1;
   const hasEncryptedMetadata = isEncrypted && encryptionVersion >= DOCUMENT_ENCRYPTION_VERSION;
+  const rawCategory = hasEncryptedMetadata ? safeDecryptText(data.category) : data.category;
 
   return {
     id,
@@ -90,14 +104,18 @@ const mapSnapshotToDocument = (id: string, data: any): Document => {
     description: data.description
       ? isEncrypted ? safeDecryptText(data.description) : data.description
       : undefined,
-    category: hasEncryptedMetadata ? safeDecryptText(data.category) as Document['category'] : data.category,
+    category: normalizeDocumentCategory(rawCategory),
     fileUrl: hasEncryptedMetadata ? safeDecryptText(data.fileUrl) : data.fileUrl,
     fileName: hasEncryptedMetadata ? safeDecryptText(data.fileName) : data.fileName,
     fileType: data.fileType,
     fileSize: data.fileSize,
     thumbnailUrl: data.thumbnailUrl,
     date: data.date.toDate(),
-    tags: hasEncryptedMetadata ? decryptTags(data.tags) : (data.tags || []),
+    tags: hasEncryptedMetadata
+      ? decryptTags(data.tags)
+      : Array.isArray(data.tags)
+        ? data.tags.filter((tag: unknown): tag is string => typeof tag === 'string')
+        : [],
     createdAt: data.createdAt.toDate(),
     updatedAt: data.updatedAt.toDate(),
   };

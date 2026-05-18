@@ -77,6 +77,7 @@ import {
   ensureVideoThumbnailCached,
 } from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppLock } from '../contexts/AppLockContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
@@ -98,6 +99,7 @@ interface Props {
 export default function EntryDetailScreen({ navigation, route }: Props) {
   const { entry: serializedEntry } = route.params;
   const { user } = useAuth();
+  const { suppressNextBackgroundLock } = useAppLock();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
   const isDark = theme.id === 'midnight';
@@ -411,6 +413,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const pickImage = async () => {
+    suppressNextBackgroundLock();
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
@@ -457,6 +460,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const pickVideo = async () => {
+    suppressNextBackgroundLock();
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Videos,
       allowsMultipleSelection: true,
@@ -491,6 +495,7 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
   };
 
   const recordVideo = async () => {
+    suppressNextBackgroundLock();
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
@@ -548,25 +553,31 @@ export default function EntryDetailScreen({ navigation, route }: Props) {
         return;
       }
 
-      // Lataa kuva paikallisesti ensin
-      const timestamp = Date.now();
-      const localUri = `${FileSystem.cacheDirectory}shared_image_${timestamp}.jpg`;
-      
-      const downloadResult = await FileSystem.downloadAsync(selectedImage, localUri);
-      
-      if (downloadResult.uri) {
-        const result = await Sharing.shareAsync(downloadResult.uri, {
-          mimeType: 'image/jpeg',
-        });
-        
-        // Merkitse merkintä jaetuksi
-        if (user && !entry.shared) {
-          await updateEntry(entry.id, { shared: true });
-          const updatedEntry = { ...entry, shared: true };
-          setEntry(updatedEntry);
+      let shareUri = selectedImage;
+
+      // Remote image URLs must be cached locally before sharing.
+      if (!selectedImage.startsWith('file://')) {
+        const timestamp = Date.now();
+        const localUri = `${FileSystem.cacheDirectory}shared_image_${timestamp}.jpg`;
+        const downloadResult = await FileSystem.downloadAsync(selectedImage, localUri);
+
+        if (!downloadResult.uri) {
+          Alert.alert(t('common_error'), t('entry_image_upload_failed'));
+          return;
         }
-      } else {
-        Alert.alert(t('common_error'), t('entry_image_upload_failed'));
+
+        shareUri = downloadResult.uri;
+      }
+
+      await Sharing.shareAsync(shareUri, {
+        mimeType: 'image/jpeg',
+      });
+      
+      // Merkitse merkintä jaetuksi
+      if (user && !entry.shared) {
+        await updateEntry(entry.id, { shared: true });
+        const updatedEntry = { ...entry, shared: true };
+        setEntry(updatedEntry);
       }
     } catch {
       Alert.alert(t('common_error'), t('entry_share_failed'));

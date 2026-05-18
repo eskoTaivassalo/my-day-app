@@ -16,7 +16,7 @@ export interface Stats {
   currentStreak: number;
   firstEntryDate: Date | null;
   totalWords: number;
-  multiDayCount: number;
+  maxEntriesPerDay: number;
   sharedCount: number;
   entriesWithLocation: number;
   earlyBirdCount: number;
@@ -389,13 +389,13 @@ export const calculateStats = (entries: DiaryEntry[]): Stats => {
     return sum + words.length;
   }, 0);
 
-  // Laske päivät joissa on useampi merkintä
+  // Laske eniten merkintöjä yhdessä päivässä
   const entriesByDate: { [key: string]: number } = {};
   entries.forEach(entry => {
     const dateKey = new Date(entry.date).toISOString().split('T')[0];
     entriesByDate[dateKey] = (entriesByDate[dateKey] || 0) + 1;
   });
-  const multiDayCount = Object.values(entriesByDate).filter(count => count > 1).length;
+  const maxEntriesPerDay = Object.values(entriesByDate).length > 0 ? Math.max(...Object.values(entriesByDate)) : 0;
 
   // Laske jaetut merkinnät
   const sharedCount = entries.filter(entry => entry.shared === true).length;
@@ -434,7 +434,7 @@ export const calculateStats = (entries: DiaryEntry[]): Stats => {
     currentStreak: current,
     firstEntryDate: firstEntry ? new Date(firstEntry.date) : null,
     totalWords,
-    multiDayCount,
+    maxEntriesPerDay,
     sharedCount,
     entriesWithLocation,
     earlyBirdCount,
@@ -457,7 +457,7 @@ export const getUnlockedAchievements = (stats: Stats): Achievement[] => {
         // Tarkistetaan onko yksikään merkintä jossa on tarpeeksi sanoja
         return stats.totalWords >= achievement.requirement;
       case 'multiDay':
-        return stats.multiDayCount >= achievement.requirement;
+        return stats.maxEntriesPerDay >= achievement.requirement;
       case 'shared':
         return stats.sharedCount >= achievement.requirement;
       case 'location':
@@ -489,7 +489,7 @@ export const getNextAchievement = (stats: Stats): Achievement | null => {
         case 'words':
           return stats.totalWords < achievement.requirement;
         case 'multiDay':
-          return stats.multiDayCount < achievement.requirement;
+          return stats.maxEntriesPerDay < achievement.requirement;
         case 'shared':
           return stats.sharedCount < achievement.requirement;
         case 'location':
@@ -541,7 +541,7 @@ export const getProgressToNext = (stats: Stats): { progress: number; current: nu
       current = stats.totalWords;
       break;
     case 'multiDay':
-      current = stats.multiDayCount;
+      current = stats.maxEntriesPerDay;
       break;
     case 'shared':
       current = stats.sharedCount;

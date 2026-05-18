@@ -10,7 +10,10 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
  * Näyttää ensin kuvan ilman kehystä.
@@ -26,6 +29,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppLock } from '../contexts/AppLockContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getLocaleFromLanguage } from '../i18n/locale';
@@ -33,6 +37,18 @@ import { createEntry, uploadImages, uploadVideos } from '../services/diaryServic
 import { colors, spacing, borderRadius, typography } from '../theme/theme';
 
 type LayoutType = 'grid' | 'masonry' | 'magazine' | 'full' | 'framed' | 'overlay';
+type EntryLocation = { latitude: number; longitude: number; address?: string };
+
+interface NewEntryDraft {
+  title: string;
+  content: string;
+  selectedDate: string;
+  selectedImages: string[];
+  selectedVideos: string[];
+  selectedVideoThumbnails: Record<string, string>;
+  layout: LayoutType;
+  location: EntryLocation | null;
+}
 
 export default function NewEntryScreen({ navigation }: any) {
   const [title, setTitle] = useState('');
@@ -46,15 +62,18 @@ export default function NewEntryScreen({ navigation }: any) {
   const [layout, setLayout] = useState<LayoutType>('grid');
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [location, setLocation] = useState<{ latitude: number; longitude: number; address?: string } | null>(null);
+  const [location, setLocation] = useState<EntryLocation | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const { user } = useAuth();
+  const { suppressNextBackgroundLock } = useAppLock();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
   const isDark = theme.id === 'midnight';
   const locale = getLocaleFromLanguage(language);
   const skipDiscardPromptRef = useRef(false);
   const selectedVideosRef = useRef<string[]>([]);
+  const draftHydratedRef = useRef(false);
+  const draftStorageKey = user ? `new_entry_draft:${user.uid}` : null;
 
   useEffect(() => {
     selectedVideosRef.current = selectedVideos;
@@ -80,6 +99,152 @@ export default function NewEntryScreen({ navigation }: any) {
       layout !== 'grid'
     );
   };
+
+  const clearDraft = async () => {
+    if (!draftStorageKey) {
+      return;
+    }
+    try {
+      await AsyncStorage.removeItem(draftStorageKey);
+    } catch {
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!draftStorageKey || !draftHydratedRef.current || saving) {
+      return;
+    }
+
+    if (!hasDraftChanges()) {
+      await clearDraft();
+      return;
+    }
+
+    const draft: NewEntryDraft = {
+      title,
+      content,
+      selectedDate: selectedDate.toISOString(),
+      selectedImages,
+      selectedVideos,
+      selectedVideoThumbnails,
+      layout,
+      location,
+    };
+
+    try {
+      await AsyncStorage.setItem(draftStorageKey, JSON.stringify(draft));
+    } catch {
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    draftHydratedRef.current = false;
+
+    const restoreDraft = async () => {
+      if (!draftStorageKey) {
+        draftHydratedRef.current = true;
+        return;
+      }
+
+      try {
+        const raw = await AsyncStorage.getItem(draftStorageKey);
+        if (!raw || !isMounted) {
+          return;
+        }
+
+        const draft = JSON.parse(raw) as Partial<NewEntryDraft>;
+
+        if (typeof draft.title === 'string') {
+          setTitle(draft.title);
+        }
+        if (typeof draft.content === 'string') {
+          setContent(draft.content);
+        }
+        if (typeof draft.selectedDate === 'string') {
+          const parsedDate = new Date(draft.selectedDate);
+          if (!Number.isNaN(parsedDate.getTime())) {
+            setSelectedDate(parsedDate);
+          }
+        }
+        if (Array.isArray(draft.selectedImages)) {
+          setSelectedImages(draft.selectedImages.filter((uri): uri is string => typeof uri === 'string'));
+        }
+        if (Array.isArray(draft.selectedVideos)) {
+          const restoredVideos = draft.selectedVideos.filter((uri): uri is string => typeof uri === 'string');
+          setSelectedVideos(restoredVideos);
+          selectedVideosRef.current = restoredVideos;
+        }
+        if (draft.selectedVideoThumbnails && typeof draft.selectedVideoThumbnails === 'object') {
+          setSelectedVideoThumbnails(draft.selectedVideoThumbnails as Record<string, string>);
+        }
+        if (draft.layout && ['grid', 'masonry', 'magazine', 'full', 'framed', 'overlay'].includes(draft.layout)) {
+          setLayout(draft.layout as LayoutType);
+        }
+        if (draft.location && typeof draft.location === 'object') {
+          setLocation(draft.location as EntryLocation);
+        }
+      } catch {
+      } finally {
+        draftHydratedRef.current = true;
+      }
+    };
+
+    void restoreDraft();
+
+    return () => {
+      isMounted = false;
+      draftHydratedRef.current = false;
+    };
+  }, [draftStorageKey]);
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void saveDraft();
+    }, 700);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    title,
+    content,
+    selectedDate,
+    selectedImages,
+    selectedVideos,
+    selectedVideoThumbnails,
+    layout,
+    location,
+    saving,
+    draftStorageKey,
+  ]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (nextState === 'inactive' || nextState === 'background') {
+        void saveDraft();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [
+    title,
+    content,
+    selectedDate,
+    selectedImages,
+    selectedVideos,
+    selectedVideoThumbnails,
+    layout,
+    location,
+    saving,
+    draftStorageKey,
+  ]);
 
   const resolveVideoThumbnailsForUris = async (uris: string[]) => {
     const uniqueUris = Array.from(new Set(uris));
@@ -129,8 +294,9 @@ export default function NewEntryScreen({ navigation }: any) {
         {
           text: t('common_yes'),
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             skipDiscardPromptRef.current = true;
+            await clearDraft();
             onConfirm();
           },
         },
@@ -219,6 +385,7 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const pickImageFromGallery = async () => {
+    suppressNextBackgroundLock();
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: 'images',
       allowsMultipleSelection: true,
@@ -232,6 +399,7 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const takePhoto = async () => {
+    suppressNextBackgroundLock();
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
@@ -255,6 +423,7 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const pickVideoFromGallery = async () => {
+    suppressNextBackgroundLock();
     setIsPreparingVideos(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -275,6 +444,7 @@ export default function NewEntryScreen({ navigation }: any) {
   };
 
   const recordVideo = async () => {
+    suppressNextBackgroundLock();
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
     if (status !== 'granted') {
@@ -496,6 +666,7 @@ export default function NewEntryScreen({ navigation }: any) {
       );
 
       // Show success message
+      await clearDraft();
       Alert.alert(
         t('entry_saved'),
         t('new_entry_saved'),

@@ -10,12 +10,12 @@ import {
   Modal,
   ScrollView,
   ActivityIndicator,
-  SafeAreaView,
   InteractionManager,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -37,6 +37,7 @@ export default function DocumentsScreen({ navigation }: any) {
   const { user } = useAuth();
   const { t, language } = useLanguage();
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const isDark = theme.id === 'midnight';
   const locale = getLocaleFromLanguage(language);
 
@@ -281,7 +282,8 @@ export default function DocumentsScreen({ navigation }: any) {
   }, [loadDocuments, t]);
 
   const renderDocument = useCallback(({ item }: { item: Document }) => {
-    const category = DOCUMENT_CATEGORIES[item.category];
+    const category = DOCUMENT_CATEGORIES[item.category] ?? DOCUMENT_CATEGORIES.other;
+    const safeTags = Array.isArray(item.tags) ? item.tags : [];
 
     return (
       <TouchableOpacity
@@ -326,14 +328,14 @@ export default function DocumentsScreen({ navigation }: any) {
           </Text>
         ) : null}
 
-        {item.tags.length > 0 ? (
+        {safeTags.length > 0 ? (
           <View style={styles.tagsContainer}>
-            {item.tags.slice(0, 3).map((tag, index) => (
+            {safeTags.slice(0, 3).map((tag, index) => (
               <View key={`${item.id}-${index}`} style={styles.tag}>
                 <Text style={[styles.tagText, { color: theme.colors.primary, fontFamily: theme.fonts.bodyFamily }]}>{tag}</Text>
               </View>
             ))}
-            {item.tags.length > 3 ? <Text style={[styles.moreTagsText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>+{item.tags.length - 3}</Text> : null}
+            {safeTags.length > 3 ? <Text style={[styles.moreTagsText, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>+{safeTags.length - 3}</Text> : null}
           </View>
         ) : null}
       </TouchableOpacity>
@@ -342,7 +344,16 @@ export default function DocumentsScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.colors.white, borderBottomColor: theme.colors.border }] }>
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: theme.colors.white,
+            borderBottomColor: theme.colors.border,
+            paddingTop: insets.top + spacing.sm,
+          },
+        ]}
+      >
         <Text style={[styles.headerTitle, { color: theme.colors.text, fontFamily: theme.fonts.headingFamily }]}>{t('documents_header')}</Text>
         <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary, fontFamily: theme.fonts.bodyFamily }]}>
           {t(documents.length === 1 ? 'documents_count_one' : 'documents_count_many', {

@@ -83,7 +83,7 @@ export default function TimelineScreen({ navigation }: any) {
     currentStreak: 0,
     firstEntryDate: null,
     totalWords: 0,
-    multiDayCount: 0,
+    maxEntriesPerDay: 0,
     sharedCount: 0,
     entriesWithLocation: 0,
     earlyBirdCount: 0,
@@ -356,7 +356,7 @@ export default function TimelineScreen({ navigation }: any) {
         currentStreak: 0,
         firstEntryDate: null,
         totalWords: 0,
-        multiDayCount: 0,
+        maxEntriesPerDay: 0,
         sharedCount: 0,
         entriesWithLocation: 0,
         earlyBirdCount: 0,
@@ -499,7 +499,7 @@ export default function TimelineScreen({ navigation }: any) {
         current = stats.totalWords;
         break;
       case 'multiDay':
-        current = stats.multiDayCount;
+        current = stats.maxEntriesPerDay;
         break;
       case 'shared':
         current = stats.sharedCount;
@@ -1033,38 +1033,47 @@ export default function TimelineScreen({ navigation }: any) {
       {/* Header */}
       <View style={[styles.header, themed.headerBg]}>
         <View style={styles.headerTop}>
-          <Text style={[styles.headerTitle, themed.headingText]}>{t('timeline_header')}</Text>
-          
-          {/* Search Icon */}
-          <TouchableOpacity
-            style={[styles.searchIconButton, themed.chipBg]}
-            onPress={() => {
-              setShowSearch(!showSearch);
-              if (showSearch) {
-                setSearchQuery('');
-              }
-            }}
+          <Text
+            style={[styles.headerTitle, themed.headingText]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.55}
           >
-            <Text style={styles.searchIconText}>🔍</Text>
-          </TouchableOpacity>
+            {t('timeline_header')}
+          </Text>
 
-          <TouchableOpacity
-            style={[styles.reminderButton, themed.chipBg]}
-            onPress={() => navigation.navigate('Reminders')}
-          >
-            <Text style={styles.reminderIconText}>⏰</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[styles.profileButton, themed.chipBg]}
-            onPress={() => navigation.navigate('Profile')}
-          >
-            {profileImage ? (
-              <Image source={{ uri: profileImage }} style={styles.profileImage} />
-            ) : (
-              <Text style={styles.profileIcon}>👤</Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            {/* Search Icon */}
+            <TouchableOpacity
+              style={[styles.searchIconButton, themed.chipBg]}
+              onPress={() => {
+                setShowSearch(!showSearch);
+                if (showSearch) {
+                  setSearchQuery('');
+                }
+              }}
+            >
+              <Text style={styles.searchIconText}>🔍</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.reminderButton, themed.chipBg]}
+              onPress={() => navigation.navigate('Reminders')}
+            >
+              <Text style={styles.reminderIconText}>⏰</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.profileButton, themed.chipBg]}
+              onPress={() => navigation.navigate('Profile')}
+            >
+              {profileImage ? (
+                <Image source={{ uri: profileImage }} style={styles.profileImage} />
+              ) : (
+                <Text style={styles.profileIcon}>👤</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         {showGreetingCard && (
@@ -1256,7 +1265,16 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     ...commonStyles.heading1,
-    marginBottom: spacing.xs,
+    marginBottom: 0,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: spacing.sm,
+    flexShrink: 0,
   },
   headerSubtitle: {
     ...commonStyles.bodySecondary,
