@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,6 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
@@ -148,6 +147,12 @@ export default function NewEntryScreen({ navigation, route }: any) {
         return;
       }
 
+      // Skip restoration if clearForm is explicitly requested
+      if (route?.params?.clearForm === true) {
+        draftHydratedRef.current = true;
+        return;
+      }
+
       try {
         const raw = await AsyncStorage.getItem(draftStorageKey);
         if (!raw || !isMounted) {
@@ -197,28 +202,23 @@ export default function NewEntryScreen({ navigation, route }: any) {
       isMounted = false;
       draftHydratedRef.current = false;
     };
-  }, [draftStorageKey]);
+  }, [draftStorageKey, route?.params?.clearForm]);
 
-  // Clear form when explicitly requested via navigation params or on fresh navigation
-  useFocusEffect(
-    useCallback(() => {
-      // If route.params.clearForm is explicitly true, clear the form
-      if (route?.params?.clearForm === true) {
-        setTitle('');
-        setContent('');
-        setSelectedDate(new Date());
-        setSelectedImages([]);
-        setSelectedVideos([]);
-        selectedVideosRef.current = [];
-        setSelectedVideoThumbnails({});
-        setLayout('grid');
-        setLocation(null);
-        
-        // Also clear the draft from storage
-        void clearDraft();
-      }
-    }, [route?.params?.clearForm, draftStorageKey])
-  );
+  useEffect(() => {
+    // Clear form fields when clearForm param is true
+    if (route?.params?.clearForm === true) {
+      setTitle('');
+      setContent('');
+      setSelectedDate(new Date());
+      setSelectedImages([]);
+      setSelectedVideos([]);
+      selectedVideosRef.current = [];
+      setSelectedVideoThumbnails({});
+      setLayout('grid');
+      setLocation(null);
+      void clearDraft();
+    }
+  }, [route?.params?.clearForm]);
 
   useEffect(() => {
     if (!draftHydratedRef.current) {
