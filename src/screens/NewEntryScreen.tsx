@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
@@ -50,7 +51,7 @@ interface NewEntryDraft {
   location: EntryLocation | null;
 }
 
-export default function NewEntryScreen({ navigation }: any) {
+export default function NewEntryScreen({ navigation, route }: any) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -197,6 +198,27 @@ export default function NewEntryScreen({ navigation }: any) {
       draftHydratedRef.current = false;
     };
   }, [draftStorageKey]);
+
+  // Clear form when explicitly requested via navigation params or on fresh navigation
+  useFocusEffect(
+    useCallback(() => {
+      // If route.params.clearForm is explicitly true, clear the form
+      if (route?.params?.clearForm === true) {
+        setTitle('');
+        setContent('');
+        setSelectedDate(new Date());
+        setSelectedImages([]);
+        setSelectedVideos([]);
+        selectedVideosRef.current = [];
+        setSelectedVideoThumbnails({});
+        setLayout('grid');
+        setLocation(null);
+        
+        // Also clear the draft from storage
+        void clearDraft();
+      }
+    }, [route?.params?.clearForm, draftStorageKey])
+  );
 
   useEffect(() => {
     if (!draftHydratedRef.current) {

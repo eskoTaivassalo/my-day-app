@@ -1220,7 +1220,7 @@ export default function TimelineScreen({ navigation }: any) {
               {!searchQuery.trim() && (
                 <TouchableOpacity
                   style={[styles.emptyButton, themed.emptyButtonBg]}
-                  onPress={() => navigation.navigate('NewEntry')}
+                  onPress={() => navigation.navigate('NewEntry', { clearForm: true })}
                 >
                   <Text style={styles.emptyButtonText}>{t('timeline_create_first')}</Text>
                 </TouchableOpacity>
@@ -1234,7 +1234,7 @@ export default function TimelineScreen({ navigation }: any) {
       {entries.length > 0 && (
         <TouchableOpacity
           style={[styles.fab, themed.fabBg]}
-          onPress={() => navigation.navigate('NewEntry')}
+          onPress={() => navigation.navigate('NewEntry', { clearForm: true })}
           activeOpacity={0.8}
         >
           <Text style={styles.fabIcon}>✏️</Text>
